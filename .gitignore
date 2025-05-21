@@ -154,3 +154,7 @@ Desktop.ini
 # Custom
 *outputs*/ 
 *data*/
+cifar_quickstart_lds.ipynb
+cifar_quickstart_magic.ipynb
+lds.py
+magic.py

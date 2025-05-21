@@ -2,77 +2,70 @@ import matplotlib.pyplot as plt
 import torchvision
 import numpy as np
 import torch
-from .data_handling import CustomCIFAR10Dataset # Use relative import
+import torchvision.transforms.functional as TF # For better image display
+# from .data_handling import CustomCIFAR10Dataset # Removed unused and incorrect import
 
-def plot_influence_images(scores_flat, target_image_info, train_dataset_info,
-                          num_to_show, plot_title_prefix="Influential Training Images",
+# Assuming config might be used for default plot save locations or styles
+# from .config import MAGIC_PLOTS_DIR # Example if plots dir is needed here as a default
+
+def plot_influence_images(scores_flat, target_image_info, train_dataset_info, 
+                          num_to_show=5, plot_title_prefix="Influence Analysis", 
                           save_path=None):
     """
-    Plots a target image alongside its most and least influential training images.
+    Plots the most positively and negatively influential training images for a target image.
 
     Args:
-        scores_flat (np.array): Flat array of influence scores for all training samples.
-        target_image_info (dict): Dict with {'image': tensor, 'label': int, 'id_str': str}.
-        train_dataset_info (dict): Dict with {'dataset': CustomCIFAR10Dataset, 'name': str}.
-        num_to_show (int): Number of top/bottom influential images to display.
-        plot_title_prefix (str): Prefix for the main plot title.
-        save_path (Path, optional): Path to save the plot. If None, plot is only shown.
+        scores_flat (np.array): 1D array of influence scores for all training samples.
+        target_image_info (dict): Contains {
+            'image': torch.Tensor (C,H,W), a single target image tensor (typically unnormalized),
+            'label': int, target image label,
+            'id_str': str, identifier string for the target image (e.g., 'Val Idx 21')
+        }
+        train_dataset_info (dict): Contains {
+            'dataset': torch.utils.data.Dataset (should return img, label, idx),
+            'name': str, name of the training dataset (e.g., 'CIFAR10 Train')
+        }
+        num_to_show (int): Number of top positive and top negative images to display.
+        plot_title_prefix (str): Prefix for the plot title.
+        save_path (Path or str, optional): If provided, saves the plot to this path.
     """
-    print("Plotting influence results...")
-
-    target_image = target_image_info['image']
+    target_img_tensor = target_image_info['image']
     target_label = target_image_info['label']
     target_id_str = target_image_info['id_str']
-
     train_dataset = train_dataset_info['dataset']
 
-    fig, axs = plt.subplots(nrows=2, ncols=num_to_show + 2,
-                            figsize=(2.5 * (num_to_show + 2), 6)) # Adjusted figsize for titles
-    fig.suptitle(f'{plot_title_prefix} for {target_id_str} (Label: {target_label})', fontsize=16, y=0.98)
+    # Get top N positive and negative influential training images
+    sorted_indices = np.argsort(scores_flat)
+    most_helpful_indices = sorted_indices[-num_to_show:][::-1]  # Top N positive
+    most_harmful_indices = sorted_indices[:num_to_show]       # Top N negative
 
-    def display_img(ax, img_tensor, title, is_target_image=False):
-        # Target image is assumed to be normalized, training images from train_ds_viz are ToTensor output (0-1 range)
-        if is_target_image: # Unnormalize if it's the target image
-            # Crude unnormalization for viz - specific to CIFAR10
-            mean = torch.tensor([0.4914, 0.4822, 0.4465]).view(3, 1, 1)
-            std = torch.tensor([0.2023, 0.1994, 0.2010]).view(3, 1, 1)
-            if img_tensor.device != mean.device:
-                 mean = mean.to(img_tensor.device)
-                 std = std.to(img_tensor.device)
-            img_tensor_display = img_tensor * std + mean
-            img_tensor_display = torch.clamp(img_tensor_display, 0, 1)
-        else: # Training images from train_ds_viz are assumed to be ToTensor output (0-1 range)
-            img_tensor_display = img_tensor # Already in [0,1] range from ToTensor
+    fig, axs = plt.subplots(2, num_to_show + 1, figsize=(3 * (num_to_show + 1), 6))
+    fig.suptitle(f'{plot_title_prefix}: Target {target_id_str} (Label: {target_label})', fontsize=16)
 
-        ax.imshow(img_tensor_display.permute(1, 2, 0).cpu().numpy()) # CHW to HWC, ensure CPU for imshow
-        ax.set_title(title, fontsize=9)
-        ax.axis('off')
+    # Display target image
+    axs[0, 0].imshow(TF.to_pil_image(target_img_tensor))
+    axs[0, 0].set_title(f"Target Image\n{target_id_str} (L: {target_label})")
+    axs[0, 0].axis('off')
+    axs[1, 0].axis('off') # Empty space below target
 
-    # Display target image in both rows for reference
-    display_img(axs[0, 0], target_image, f"Target {target_id_str}\nLabel: {target_label}", is_target_image=True)
-    axs[0, 1].axis('off') # Spacer
-    display_img(axs[1, 0], target_image, f"Target {target_id_str}\nLabel: {target_label}", is_target_image=True)
-    axs[1, 1].axis('off') # Spacer
+    def display_train_images(indices_list, influence_type_str, row_idx):
+        for i, train_idx in enumerate(indices_list):
+            train_img_tensor, train_label, _ = train_dataset[train_idx]
+            score = scores_flat[train_idx]
+            ax = axs[row_idx, i + 1]
+            ax.imshow(TF.to_pil_image(train_img_tensor))
+            ax.set_title(f'{influence_type_str} #{i+1}\nIdx: {train_idx} (L: {train_label})\nScore: {score:.2e}')
+            ax.axis('off')
 
-    # Most positively influential (proponents)
-    proponent_indices = np.argsort(scores_flat)[::-1][:num_to_show]
-    axs[0, 1].set_title("Most Positively Influential (Proponents)", loc='center', fontsize=10, y=1.1, x= (num_to_show/2))
+    display_train_images(most_helpful_indices, "Helpful", 0)
+    display_train_images(most_harmful_indices, "Harmful", 1)
 
-    for i, train_idx in enumerate(proponent_indices):
-        img, lbl, _ = train_dataset[train_idx]
-        display_img(axs[0, i + 2], img, f"Train {train_idx} (L:{lbl})\nScore: {scores_flat[train_idx]:.2e}")
-
-    # Most negatively influential (opponents)
-    opponent_indices = np.argsort(scores_flat)[:num_to_show]
-    axs[1, 1].set_title("Most Negatively Influential (Opponents)", loc='center', fontsize=10, y=1.1, x= (num_to_show/2))
-
-    for i, train_idx in enumerate(opponent_indices):
-        img, lbl, _ = train_dataset[train_idx]
-        display_img(axs[1, i + 2], img, f"Train {train_idx} (L:{lbl})\nScore: {scores_flat[train_idx]:.2e}")
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.93]) # Adjust rect to make space for suptitle and row titles
+    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make space for suptitle
+    
     if save_path:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
         plt.savefig(save_path)
-        print(f"Influence plot saved to {save_path}")
-    plt.show() 
+        print(f"Saved influence plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig) # Close the figure to free memory 

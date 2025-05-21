@@ -1,67 +1,87 @@
 from pathlib import Path
+import torch
+# import os # Not strictly necessary if pathlib is used for all path ops
 
 # --- Project Structure ---
-PROJECT_ROOT = Path(__file__).resolve().parent.parent # Assumes src is one level down
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-DATA_DIR = PROJECT_ROOT / "data" # If you decide to store persistent data
-
-# --- Common Paths ---
-CIFAR_ROOT = Path("/tmp/cifar/") # Or use DATA_DIR / "cifar10" if downloaded locally
-
-# Checkpoints and scores directories for MAGIC (influence analysis)
-MAGIC_CHECKPOINTS_DIR = OUTPUTS_DIR / "checkpoints_magic"
-MAGIC_SCORES_DIR = OUTPUTS_DIR / "scores_magic"
-MAGIC_PLOTS_DIR = OUTPUTS_DIR / "plots_magic"
-
-# Checkpoints, losses, and scores directories for LDS (subset validation)
-LDS_CHECKPOINTS_DIR = OUTPUTS_DIR / "checkpoints_lds"
-LDS_LOSSES_DIR = OUTPUTS_DIR / "losses_lds"
-LDS_INDICES_FILE = OUTPUTS_DIR / "indices_lds.pkl" # For saving/loading subset indices
-LDS_PLOTS_DIR = OUTPUTS_DIR / "plots_lds"
-
+# DATA_DIR = PROJECT_ROOT / "data" # Uncomment if you have a persistent local data folder
 
 # --- General Settings ---
-RANDOM_SEED = 42
-NUM_CLASSES = 10 # For CIFAR-10
-NUM_TRAINING_SAMPLES_CIFAR10 = 50000
-NUM_TEST_SAMPLES_CIFAR10 = 10000
+SEED = 42
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NUM_CLASSES = 10
+NUM_TRAIN_SAMPLES = 50000 # Standardized name for CIFAR-10 training samples
+# NUM_TEST_SAMPLES_CIFAR10 = 10000 # If needed elsewhere
 
-# --- MAGIC Analyzer (Influence Calculation) Specific Configs ---
+# --- Data Handling ---
+CIFAR_ROOT = '/tmp/cifar/' # Default path for CIFAR-10 download
+DATALOADER_NUM_WORKERS = 8 # Default from magic.py/lds.py
+
+# --- Output Subdirectories (Standardized) ---
+# MAGIC Analysis Outputs
+MAGIC_CHECKPOINTS_DIR = OUTPUTS_DIR / "checkpoints_magic"
+MAGIC_SCORES_DIR = OUTPUTS_DIR / "scores_magic"
+MAGIC_PLOTS_DIR = OUTPUTS_DIR / "plots_magic" # Specific to MAGIC plots
+BATCH_DICT_FILE = OUTPUTS_DIR / "magic_batch_dict.pkl" # For saving/loading batch_dict
+
+# LDS Validator Outputs
+LDS_CHECKPOINTS_DIR = OUTPUTS_DIR / "checkpoints_lds"
+LDS_LOSSES_DIR = OUTPUTS_DIR / "losses_lds"
+LDS_INDICES_FILE = OUTPUTS_DIR / "indices_lds.pkl"
+LDS_PLOTS_DIR = OUTPUTS_DIR / "plots_lds" # Specific to LDS plots
+
+# --- File Naming Helper Functions (using Path objects) ---
+def get_magic_checkpoint_path(model_id: int, step_or_epoch: int) -> Path:
+    return MAGIC_CHECKPOINTS_DIR / f"sd_{model_id}_{step_or_epoch}.pt"
+
+def get_magic_scores_path(target_idx: int) -> Path:
+    # This will store per-step scores from magic_analyzer
+    return MAGIC_SCORES_DIR / f"magic_scores_per_step_val_{target_idx}.pkl"
+
+def get_lds_subset_model_checkpoint_path(model_id: int, step_or_epoch: int) -> Path:
+    return LDS_CHECKPOINTS_DIR / f"sd_lds_{model_id}_{step_or_epoch}.pt"
+
+def get_lds_model_val_loss_path(model_id: int) -> Path:
+    return LDS_LOSSES_DIR / f"loss_lds_{model_id}.pkl"
+
+# --- MAGIC Analyzer Specific Configurations ---
 MAGIC_TARGET_VAL_IMAGE_IDX = 21
 MAGIC_NUM_INFLUENTIAL_IMAGES_TO_SHOW = 8
-MAGIC_REPLAY_LEARNING_RATE = 1e-3 # Learning rate for the REPLAY algorithm's approximation
 
-# Training parameters for the model whose influence is being analyzed
-MAGIC_TRAIN_BATCH_SIZE = 512
-MAGIC_TRAIN_EPOCHS = 2 # Results in ~196 steps for CIFAR10/batch 512
-MAGIC_BASE_LR = 0.01 # Optimizer LR for training the main model
-MAGIC_MOMENTUM = 0.9
-MAGIC_WEIGHT_DECAY = 5e-4
+# Hyperparameters for training the main model in MAGIC analysis (to generate checkpoints for replay)
+# Aligned with magic.py effective training settings for the model whose checkpoints are replayed.
+MAGIC_MODEL_TRAIN_LR = 1e-3
+MAGIC_MODEL_TRAIN_EPOCHS = 2
+MAGIC_MODEL_TRAIN_BATCH_SIZE = 512
+MAGIC_MODEL_TRAIN_MOMENTUM = 0.0 # magic.py optimizer effectively had 0 momentum
+MAGIC_MODEL_TRAIN_WEIGHT_DECAY = 0.0 # magic.py optimizer effectively had 0 WD
+MAGIC_MODEL_LABEL_SMOOTHING = 0.0 # magic.py used 0.0 for its CrossEntropyLoss
+
+# Hyperparameters for the REPLAY influence calculation itself
+MAGIC_REPLAY_LEARNING_RATE = 1e-3 # lr used in h_t calculation in magic.py
+
+# --- LDS Validator Specific Configurations ---
+LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION = 21 # Should match MAGIC_TARGET_VAL_IMAGE_IDX
+
+# Parameters for LDS subset generation
+LDS_SUBSET_FRACTION = 0.99
+LDS_NUM_SUBSETS_TO_GENERATE = 128 # Max number of subset definitions to generate
+LDS_NUM_MODELS_TO_TRAIN = 32    # Number of these subsets to actually train models on
+
+# Hyperparameters for training LDS subset models
+# Aligned with lds.py effective training settings.
+LDS_MODEL_TRAIN_LR = 1e-3
+LDS_MODEL_TRAIN_EPOCHS = 2
+LDS_MODEL_TRAIN_BATCH_SIZE = 512
+LDS_MODEL_TRAIN_MOMENTUM = 0.0 # LDS_MOMENTUM was set to 0.0 in previous step
+LDS_MODEL_TRAIN_WEIGHT_DECAY = 0.0 # LDS_WEIGHT_DECAY was set to 0.0 in previous step
+# LDS_MODEL_LABEL_SMOOTHING = 0.0 # lds.py did not use label smoothing for its weighted loss calculation
+
+# Path to the MAGIC scores file that LDS validator will use
+# This should point to the output of magic_analyzer (per-step scores)
+MAGIC_SCORES_FILE_FOR_LDS_INPUT = get_magic_scores_path(LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION)
 
 
-# --- LDS Validator (Subset Training & Correlation) Specific Configs ---
-LDS_NUM_MODELS_TO_TRAIN = 32 # Number of models to train on subsets
-LDS_SUBSET_SIZE_FRACTION = 0.99 # Fraction of training data for each subset
-LDS_NUM_SUBSETS = 128 # Number of subset definitions to generate (can be > LDS_NUM_MODELS_TO_TRAIN)
-LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION = 21 # Which validation image's margin to correlate
-
-# Training parameters for subset models (can be same or different from MAGIC model)
-LDS_TRAIN_BATCH_SIZE = 512
-LDS_TRAIN_EPOCHS = 2 # Epochs for each subset model
-LDS_BASE_LR = 0.01
-LDS_MOMENTUM = 0.9
-LDS_WEIGHT_DECAY = 5e-4
-
-# --- Ensure output directories exist ---
-def ensure_output_dirs_exist():
-    dirs_to_create = [
-        OUTPUTS_DIR, DATA_DIR,
-        MAGIC_CHECKPOINTS_DIR, MAGIC_SCORES_DIR, MAGIC_PLOTS_DIR,
-        LDS_CHECKPOINTS_DIR, LDS_LOSSES_DIR, LDS_PLOTS_DIR
-    ]
-    for d in dirs_to_create:
-        d.mkdir(parents=True, exist_ok=True)
-
-# Call it once if this module is imported to create dirs,
-# or call explicitly from main runner.
-# ensure_output_dirs_exist() 
+# Note: The ensure_output_dirs_exist() function was removed from here.
+# It should be called from main_runner.py or relevant class constructors. 

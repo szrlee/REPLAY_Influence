@@ -5,3 +5,5 @@
 # from .magic_analyzer import run_magic_analysis
 # from .lds_validator import run_lds_validation
 # from .config import ensure_output_dirs_exist 
+
+# print(f"Initializing src package...") 
