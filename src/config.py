@@ -62,12 +62,12 @@ MAGIC_MODEL_LABEL_SMOOTHING = 0.0 # magic.py used 0.0 for its CrossEntropyLoss
 MAGIC_REPLAY_LEARNING_RATE = 1e-3 # lr used in h_t calculation in magic.py
 
 # --- LDS Validator Specific Configurations ---
-LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION = 21 # Should match MAGIC_TARGET_VAL_IMAGE_IDX
+LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION = MAGIC_TARGET_VAL_IMAGE_IDX # Should match MAGIC_TARGET_VAL_IMAGE_IDX
 
 # Parameters for LDS subset generation
 LDS_SUBSET_FRACTION = 0.99
 LDS_NUM_SUBSETS_TO_GENERATE = 128 # Max number of subset definitions to generate
-LDS_NUM_MODELS_TO_TRAIN = 32    # Number of these subsets to actually train models on
+LDS_NUM_MODELS_TO_TRAIN = 128    # Number of these subsets to actually train models on
 
 # Hyperparameters for training LDS subset models
 # Aligned with lds.py effective training settings.
