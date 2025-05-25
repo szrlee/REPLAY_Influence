@@ -15,296 +15,86 @@ import logging
 
 # Project-specific imports
 from . import config
-from .utils import set_seeds
+from .utils import (
+    create_deterministic_dataloader, 
+    create_deterministic_model, 
+    create_deterministic_optimizer, 
+    create_deterministic_scheduler, 
+    log_scheduler_info,
+    update_dataloader_epoch,
+)
 from .model_def import construct_rn9
-from .data_handling import get_cifar10_dataloader, CustomDataset
+from .data_handling import get_cifar10_dataloader
 # LDS does not use the global batch_dict_for_replay from magic_analyzer
 
 logger = logging.getLogger('influence_analysis.lds')
 
+# Shared instance IDs are now sourced from config (e.g., config.SHARED_MODEL_INSTANCE_ID)
 
-def verify_data_ordering_consistency() -> bool:
-    """
-    Verifies that LDS validator uses the same data ordering as MAGIC analyzer.
-    This ensures that sample indices refer to the exact same data points across
-    multiple epochs, even when LDS uses subset-based weighted training.
-    
-    Returns:
-        bool: True if data ordering is consistent, False otherwise.
-    """
-    logger.info("Verifying data ordering consistency between MAGIC and LDS...")
-    
-    # Test 1: Basic data loader consistency with EXACT same parameters
-    logger.info("Test 1: Verifying basic data loader consistency...")
-    
-    # Verify batch sizes are identical
-    if config.MAGIC_MODEL_TRAIN_BATCH_SIZE != config.LDS_MODEL_TRAIN_BATCH_SIZE:
-        logger.error(f"Batch size mismatch: MAGIC={config.MAGIC_MODEL_TRAIN_BATCH_SIZE}, LDS={config.LDS_MODEL_TRAIN_BATCH_SIZE}")
-        return False
-    
-    # Compare first few batches to verify consistent ordering
-    try:
-        for i in range(min(5, 10)):  # Test first 5 batches
-            # CRITICAL FIX: Create fresh DataLoaders for each comparison
-            # This ensures both DataLoaders start from identical random states
-            set_seeds(config.SEED)
-            magic_loader = get_cifar10_dataloader(
-                batch_size=config.MAGIC_MODEL_TRAIN_BATCH_SIZE, 
-                split='train', shuffle=True, augment=False,
-                num_workers=config.DATALOADER_NUM_WORKERS, root_path=config.CIFAR_ROOT
-            )
-            magic_iter = iter(magic_loader)
-            # Skip to the i-th batch
-            for _ in range(i + 1):
-                magic_batch = next(magic_iter)
-            
-            set_seeds(config.SEED)
-            lds_loader = get_cifar10_dataloader(
-                batch_size=config.LDS_MODEL_TRAIN_BATCH_SIZE,
-                split='train', 
-                shuffle=True, 
-                augment=False,
-                num_workers=config.DATALOADER_NUM_WORKERS,
-                root_path=config.CIFAR_ROOT
-            )
-            lds_iter = iter(lds_loader)
-            # Skip to the i-th batch
-            for _ in range(i + 1):
-                lds_batch = next(lds_iter)
-            
-            magic_indices = magic_batch[2]  # batch_indices
-            lds_indices = lds_batch[2]      # original_indices
-            
-            # Indices should be identical for same batches
-            if not torch.equal(magic_indices, lds_indices):
-                logger.error(f"Data ordering mismatch detected in batch {i}")
-                logger.error(f"MAGIC indices: {magic_indices[:5]}")
-                logger.error(f"LDS indices: {lds_indices[:5]}")
-                return False
-                
-        logger.info("✓ Basic data loader consistency verified")
-        
-    except Exception as e:
-        logger.error(f"Basic data loader verification failed: {e}")
-        return False
-    
-    # Test 2: Multi-epoch consistency (CRITICAL TEST)
-    logger.info("Test 2: Verifying multi-epoch data ordering consistency...")
-    
-    try:
-        # Test that same seed produces same ordering across epochs
-        set_seeds(config.SEED)
-        test_loader = get_cifar10_dataloader(
-            batch_size=100, 
-            split='train', 
-            shuffle=True, 
-            augment=False,
-            num_workers=config.DATALOADER_NUM_WORKERS,  # Use 0 workers for deterministic testing
-            root_path=config.CIFAR_ROOT
-        )
-        
-        # Collect indices from first epoch
-        epoch1_indices = []
-        for batch_idx, (_, _, indices) in enumerate(test_loader):
-            epoch1_indices.append(indices.clone())
-            if batch_idx >= 4:  # First 5 batches
-                break
-        
-        # Collect indices from second epoch (without resetting seed)
-        epoch2_indices = []
-        for batch_idx, (_, _, indices) in enumerate(test_loader):
-            epoch2_indices.append(indices.clone())
-            if batch_idx >= 4:  # First 5 batches
-                break
-        
-        # Check if ordering is consistent across epochs
-        epoch1_flat = torch.cat(epoch1_indices)
-        epoch2_flat = torch.cat(epoch2_indices)
-        
-        if not torch.equal(epoch1_flat, epoch2_flat):
-            logger.info("✓ Multi-epoch shuffling detected (expected behavior)")
-        else:
-            logger.info("✓ Multi-epoch consistency maintained")
-            
-    except Exception as e:
-        logger.error(f"Multi-epoch verification failed: {e}")
-        return False
-    
-    # Test 3: CRITICAL TEST - Complete data sequence consistency
-    logger.info("Test 3: CRITICAL - Verifying complete data sequence consistency between MAGIC and LDS...")
-    
-    try:
-        # This tests the exact scenario that happens in practice:
-        # MAGIC: set seed once, create dataloader, train for multiple epochs
-        # LDS: set seed once, create ONE shared dataloader, all models use same dataloader
-        
-        # Simulate MAGIC data sequence
-        set_seeds(config.SEED)
-        magic_test_loader = get_cifar10_dataloader(
-            batch_size=100,  # Small batch for testing
-            split='train', 
-            shuffle=True, 
-            augment=False,
-            num_workers=config.DATALOADER_NUM_WORKERS,  # Use 0 workers for deterministic testing
-            root_path=config.CIFAR_ROOT
-        )
-        
-        # Collect complete sequence from MAGIC-style training
-        magic_sequence = []
-        for epoch in range(2):  # Test 2 epochs
-            for batch_idx, (_, _, indices) in enumerate(magic_test_loader):
-                magic_sequence.append((epoch, batch_idx, indices.clone()))
-                if batch_idx >= 4:  # First 5 batches per epoch
-                    break
-        
-        # Simulate LDS data sequence (shared dataloader approach)
-        set_seeds(config.SEED)
-        lds_shared_loader = get_cifar10_dataloader(
-            batch_size=100,  # Same batch size
-            split='train', 
-            shuffle=True, 
-            augment=False,
-            num_workers=config.DATALOADER_NUM_WORKERS,  # Use 0 workers for deterministic testing
-            root_path=config.CIFAR_ROOT
-        )
-        
-        # Collect sequence from LDS-style training (simulating multiple models using same dataloader)
-        lds_sequence = []
-        for epoch in range(2):  # Test 2 epochs
-            for batch_idx, (_, _, indices) in enumerate(lds_shared_loader):
-                lds_sequence.append((epoch, batch_idx, indices.clone()))
-                if batch_idx >= 4:  # First 5 batches per epoch
-                    break
-        
-        # Compare sequences - they should be IDENTICAL
-        if len(magic_sequence) != len(lds_sequence):
-            logger.error(f"Sequence length mismatch: MAGIC={len(magic_sequence)}, LDS={len(lds_sequence)}")
-            return False
-        
-        for i, ((m_epoch, m_batch, m_indices), (l_epoch, l_batch, l_indices)) in enumerate(zip(magic_sequence, lds_sequence)):
-            if m_epoch != l_epoch or m_batch != l_batch:
-                logger.error(f"Epoch/batch mismatch at position {i}: MAGIC=({m_epoch},{m_batch}), LDS=({l_epoch},{l_batch})")
-                return False
-            
-            if not torch.equal(m_indices, l_indices):
-                logger.error(f"Index mismatch at epoch {m_epoch}, batch {m_batch}")
-                logger.error(f"MAGIC indices: {m_indices[:5]}")
-                logger.error(f"LDS indices: {l_indices[:5]}")
-                return False
-        
-        logger.info(f"✓ Complete data sequence consistency verified across {len(magic_sequence)} batches")
-        
-    except Exception as e:
-        logger.error(f"Complete data sequence verification failed: {e}")
-        return False
-    
-    # Test 4: Subset mechanism verification
-    logger.info("Test 4: Verifying subset-based weighted training mechanism...")
-    
-    try:
-        # Create a test subset (first 1000 samples)
-        test_subset_indices = np.arange(1000)
-        
-        # Reset seed for consistent data loading
-        set_seeds(config.SEED)
-        test_loader = get_cifar10_dataloader(
-            batch_size=100, 
-            split='train', 
-            shuffle=True, 
-            augment=False,
-            num_workers=config.DATALOADER_NUM_WORKERS,  # Use 0 workers for deterministic testing
-            root_path=config.CIFAR_ROOT
-        )
-        
-        # Create weights for subset
-        data_weights = torch.zeros(config.NUM_TRAIN_SAMPLES)
-        data_weights[test_subset_indices] = 1.0
-        
-        # Check that weighted mechanism correctly identifies subset samples
-        total_subset_samples_found = 0
-        total_batches_checked = 0
-        
-        for batch_idx, (images, labels, original_indices) in enumerate(test_loader):
-            if batch_idx >= 10:  # Check first 10 batches
-                break
-                
-            active_weights = data_weights[original_indices]
-            subset_samples_in_batch = active_weights.sum().item()
-            total_subset_samples_found += subset_samples_in_batch
-            total_batches_checked += 1
-            
-            # Verify that active weights are only 0 or 1
-            unique_weights = torch.unique(active_weights)
-            if not all(w in [0.0, 1.0] for w in unique_weights):
-                logger.error(f"Invalid weights found: {unique_weights}")
-                return False
-            
-            # Verify that indices are in expected range
-            if torch.any(original_indices < 0) or torch.any(original_indices >= config.NUM_TRAIN_SAMPLES):
-                logger.error(f"Invalid indices found: min={original_indices.min()}, max={original_indices.max()}")
-                return False
-        
-        logger.info(f"✓ Subset mechanism verified: Found {total_subset_samples_found} subset samples across {total_batches_checked} batches")
-        
-        # Test 5: Model initialization consistency
-        logger.info("Test 5: Verifying model initialization consistency...")
-        
-        # Create multiple models with same seed (simulating LDS models)
-        models = []
-        for i in range(3):
-            set_seeds(config.SEED)  # Same seed for all
-            model = construct_rn9(num_classes=config.NUM_CLASSES)
-            models.append(model)
-        
-        # Check that all models have identical parameters
-        for i in range(1, len(models)):
-            for p1, p2 in zip(models[0].parameters(), models[i].parameters()):
-                if not torch.equal(p1, p2):
-                    logger.error(f"Model initialization inconsistency detected between model 0 and model {i}")
-                    return False
-                    
-        logger.info("✓ Model initialization consistency verified")
-        
-        # Test 6: Configuration consistency check
-        logger.info("Test 6: Verifying configuration consistency...")
-        
-        config_issues = []
-        
-        if config.MAGIC_MODEL_TRAIN_BATCH_SIZE != config.LDS_MODEL_TRAIN_BATCH_SIZE:
-            config_issues.append(f"Batch size mismatch: MAGIC={config.MAGIC_MODEL_TRAIN_BATCH_SIZE}, LDS={config.LDS_MODEL_TRAIN_BATCH_SIZE}")
-        
-        if config.MAGIC_TARGET_VAL_IMAGE_IDX != config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION:
-            config_issues.append(f"Target image mismatch: MAGIC={config.MAGIC_TARGET_VAL_IMAGE_IDX}, LDS={config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION}")
-        
-        if config_issues:
-            for issue in config_issues:
-                logger.error(issue)
-            return False
-        
-        logger.info("✓ Configuration consistency verified")
-        
-        logger.info("🎯 ALL data ordering verification tests PASSED")
-        logger.info("✓ LDS and MAGIC use consistent sample indices")
-        logger.info("✓ Multi-epoch behavior is predictable")
-        logger.info("✓ CRITICAL: Complete data sequence consistency verified")
-        logger.info("✓ Subset-based weighted training mechanism is correct")
-        logger.info("✓ Model initialization is consistent across LDS models")
-        logger.info("✓ Configuration parameters are aligned")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Subset mechanism verification failed: {e}")
-        return False
+# verify_data_ordering_consistency function has been moved to tests/test_helpers.py
 
+"""
+=== LINEAR DATAMODELING SCORE (LDS) VALIDATION ===
+
+This module implements the Linear Datamodeling Score (LDS) evaluation methodology for validating
+predictive data attribution methods like MAGIC. The LDS framework is based on the theoretical
+work from [IPE+22; PGI+23].
+
+THEORETICAL BACKGROUND:
+- Data Attribution Goal: Predict how changes in training data affect model behavior
+- Model Output Function f(w): Maps data weight vector w to model performance metric
+- Predictive Attribution f̃(w): Fast approximation of f(w) using influence scores
+- LDS Metric: Spearman correlation between f̃(w) and f(w) across multiple data subsets
+
+ALGORITHMIC PRINCIPLE:
+1. Generate n random subsets of training data (represented as binary weight vectors w^(i))
+2. For each subset i:
+   a) Train a model using only samples in w^(i) → get true performance f(w^(i))
+   b) Use MAGIC influence scores to predict performance f̃(w^(i))
+3. Compute LDS = Spearman_correlation({f̃(w^(i))}, {f(w^(i))})
+
+HIGH LDS CORRELATION → MAGIC accurately predicts how data changes affect model behavior
+LOW LDS CORRELATION → MAGIC predictions are unreliable
+
+KEY IMPLEMENTATION FEATURES:
+- Uses identical model initialization across all subset models (via shared instance IDs)
+- Maintains exact same data ordering as MAGIC analysis (via shared dataloader)
+- Implements efficient subset training using weighted loss (avoids creating separate datasets)
+- Focuses evaluation on the same target validation image used in MAGIC analysis
+"""
 
 def generate_and_save_subset_indices(num_subsets: Optional[int] = None, total_samples: Optional[int] = None, 
                                      subset_fraction: Optional[float] = None, file_path: Optional[Path] = None, 
                                      force_regenerate: bool = False) -> List[np.ndarray]:
+    """
+    Generate random training data subsets for LDS validation.
+    
+    ALGORITHMIC PURPOSE:
+    Creates n different binary weight vectors w^(1), w^(2), ..., w^(n) where each w^(i)
+    represents a random subset of the full training data. These subsets will be used to
+    train multiple models and evaluate how well MAGIC can predict their performance differences.
+    
+    THEORETICAL CONTEXT:
+    In the LDS framework, each subset represents a different "dataset" defined by its weight vector.
+    By training models on these different datasets and comparing predicted vs actual performance,
+    we can validate the quality of our influence score estimates.
+    
+    Args:
+        num_subsets: Number of different subsets to generate (default: config.LDS_NUM_SUBSETS_TO_GENERATE)
+        total_samples: Total number of training samples available (default: config.NUM_TRAIN_SAMPLES)
+        subset_fraction: Fraction of data to include in each subset (default: config.LDS_SUBSET_FRACTION)
+        file_path: Where to save/load subset indices (default: config.LDS_INDICES_FILE)
+        force_regenerate: Whether to regenerate even if file exists
+        
+    Returns:
+        List of numpy arrays, each containing indices for one training subset
+    """
     if num_subsets is None: num_subsets = config.LDS_NUM_SUBSETS_TO_GENERATE
     if total_samples is None: total_samples = config.NUM_TRAIN_SAMPLES # Use general NUM_TRAIN_SAMPLES
     if subset_fraction is None: subset_fraction = config.LDS_SUBSET_FRACTION
     if file_path is None: file_path = config.LDS_INDICES_FILE
 
+    # Try to load existing subsets to ensure reproducibility across runs
     if not force_regenerate and file_path.exists():
         logger.info(f"Loading subset indices from {file_path}")
         with open(file_path, 'rb') as f:
@@ -327,64 +117,127 @@ def generate_and_save_subset_indices(num_subsets: Optional[int] = None, total_sa
     
     logger.info(f"Generating {num_subsets} subsets of size {subset_sample_count} from {total_samples} total samples...")
     
+    # Generate random subsets without replacement
+    # Each subset represents a different "dataset" for LDS evaluation
     indices_list = []
     for i in range(num_subsets):
         try:
+            # Create binary weight vector: w_i = 1 for selected samples, w_i = 0 for others
             subset_indices = np.random.choice(range(total_samples), subset_sample_count, replace=False)
             indices_list.append(subset_indices)
         except ValueError as e:
             raise ValueError(f"Failed to generate subset {i}: {e}. This might happen if subset_sample_count > total_samples.")
     
+    # Save for reproducibility and efficiency in future runs
     with open(file_path, 'wb') as f:
         pickle.dump(indices_list, f)
     logger.info(f"Saved {num_subsets} subset indices to {file_path}")
     return indices_list
 
 
-def train_model_on_subset(model_id: int, train_subset_indices: np.ndarray, device: torch.device, 
-                          shared_train_loader: torch.utils.data.DataLoader,  # CRITICAL: Pre-created dataloader
-                          checkpoints_dir: Optional[Path] = None, epochs: Optional[int] = None, 
-                          lr: Optional[float] = None, momentum: Optional[float] = None, 
-                          weight_decay: Optional[float] = None) -> torch.nn.Module:
-    if checkpoints_dir is None: checkpoints_dir = config.LDS_CHECKPOINTS_DIR
-    if epochs is None: epochs = config.LDS_MODEL_TRAIN_EPOCHS
-    if lr is None: lr = config.LDS_MODEL_TRAIN_LR
-    if momentum is None: momentum = config.LDS_MODEL_TRAIN_MOMENTUM
-    if weight_decay is None: weight_decay = config.LDS_MODEL_TRAIN_WEIGHT_DECAY
+def train_model_on_subset(model_id: int, train_subset_indices: List[int], device: torch.device, 
+                         shared_train_loader: torch.utils.data.DataLoader,
+                         epochs: Optional[int] = None, lr: Optional[float] = None, 
+                         momentum: Optional[float] = None, weight_decay: Optional[float] = None) -> torch.nn.Module:
+    """
+    Train a model on a specific subset of training data with identical settings to MAGIC.
     
+    ALGORITHMIC PURPOSE:
+    Implements the learning algorithm A(w) that maps a data weight vector w to trained model parameters θ.
+    This is the core of computing the true model output function f(w) = φ(A(w)) for LDS validation.
+    
+    THEORETICAL CONTEXT:
+    In the LDS framework:
+    - Input: Binary weight vector w (represented by train_subset_indices)
+    - Process: A(w) → θ (train model using weighted samples)
+    - Output: Trained model parameters θ that will be evaluated to get f(w)
+    
+    KEY IMPLEMENTATION DETAILS:
+    - Uses IDENTICAL model initialization as MAGIC (via shared instance_id)
+    - Uses IDENTICAL training hyperparameters as MAGIC
+    - Uses IDENTICAL data ordering as MAGIC (via shared_train_loader)
+    - Implements subset training via weighted loss (efficient alternative to separate datasets)
+    
+    Args:
+        model_id: Unique identifier for this LDS model
+        train_subset_indices: Indices of training samples to include (defines weight vector w)
+        device: Computing device (CPU/GPU)
+        shared_train_loader: Same dataloader used in MAGIC analysis
+        epochs, lr, momentum, weight_decay: Training hyperparameters (defaults from config)
+        
+    Returns:
+        Trained PyTorch model ready for evaluation
+    """
+    
+    # Use shared hyperparameters if not specified - CRITICAL for consistency with MAGIC
+    if epochs is None: epochs = config.MODEL_TRAIN_EPOCHS
+    if lr is None: lr = config.MODEL_TRAIN_LR
+    if momentum is None: momentum = config.MODEL_TRAIN_MOMENTUM  
+    if weight_decay is None: weight_decay = config.MODEL_TRAIN_WEIGHT_DECAY
+    
+    checkpoints_dir = config.LDS_CHECKPOINTS_DIR
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     
-    # CRITICAL FIX: Do NOT set seeds here! 
-    # Seeds are set before EACH call to train_model_on_subset to ensure
-    # all LDS models get identical initialization but use the same dataloader sequence
     logger.debug(f"Using pre-created shared dataloader to ensure consistency with MAGIC")
 
-    # Model initialization with SAME seed as MAGIC 
-    # All models get identical initialization (seed set before each call in run_lds_validation)
-    logger.debug(f"Using SAME model initialization for ALL LDS models (seed set by caller)")
-
-    model = construct_rn9(num_classes=config.NUM_CLASSES).to(device)
+    # CRITICAL: Create model with IDENTICAL initialization as MAGIC
+    # This ensures that differences in final performance are due to training data, not initialization
+    model = create_deterministic_model(
+        master_seed=config.SEED,
+        creator_func=construct_rn9,
+        instance_id=config.SHARED_MODEL_INSTANCE_ID,  # CRITICAL: Same instance_id as MAGIC (from config)
+        num_classes=config.NUM_CLASSES
+    ).to(device)
     if device.type == 'cuda':
         model = model.to(memory_format=torch.channels_last)
 
-    # Create data_weights: 1 for samples in subset, 0 otherwise
-    # This is the KEY mechanism that ensures LDS uses subsets while maintaining data ordering
+    # CORE LDS MECHANISM: Convert subset indices to binary weight vector
+    # This implements the data weight vector w where w_i = 1 for included samples, w_i = 0 for excluded
     data_weights_for_subset = torch.zeros(config.NUM_TRAIN_SAMPLES, device=device)
     data_weights_for_subset[train_subset_indices] = 1.0
     num_active_samples_in_subset = data_weights_for_subset.sum().item()
     
     logger.debug(f"LDS Model {model_id}: Using {num_active_samples_in_subset}/{config.NUM_TRAIN_SAMPLES} samples from subset")
 
+    # Handle edge case: empty subset
     if num_active_samples_in_subset == 0:
         logger.warning(f"Model ID {model_id} has no active samples in its subset. Skipping training.")
         # Save an initial state to avoid errors later if a checkpoint is expected
         torch.save(model.state_dict(), checkpoints_dir / f'sd_lds_{model_id}_final.pt')
         return model # Return untrained model
 
-    optimizer = SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    # CRITICAL: Create optimizer with IDENTICAL settings as MAGIC
+    optimizer = create_deterministic_optimizer(
+        master_seed=config.SEED,
+        optimizer_class=SGD,
+        model_params=model.parameters(),
+        instance_id=config.SHARED_OPTIMIZER_INSTANCE_ID,  # Same instance_id as MAGIC (from config)
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay
+    )
+    
+    # CRITICAL: Create scheduler with IDENTICAL settings as MAGIC
+    scheduler = create_deterministic_scheduler(
+        master_seed=config.SEED,
+        optimizer=optimizer,
+        schedule_type=config.LR_SCHEDULE_TYPE,
+        total_steps=epochs * len(shared_train_loader),
+        instance_id=config.SHARED_SCHEDULER_INSTANCE_ID,  # Same instance_id as MAGIC (from config)
+        step_size=config.STEPLR_STEP_SIZE,
+        gamma=config.STEPLR_GAMMA,
+        t_max=config.COSINE_T_MAX,
+        max_lr=config.ONECYCLE_MAX_LR,
+        pct_start=config.ONECYCLE_PCT_START,
+        anneal_strategy=config.ONECYCLE_ANNEAL_STRATEGY,
+        div_factor=config.ONECYCLE_DIV_FACTOR,
+        final_div_factor=config.ONECYCLE_FINAL_DIV_FACTOR
+    )
+    
+    # Log scheduler information
+    log_scheduler_info(scheduler, config.LR_SCHEDULE_TYPE, logger, f"LDS Model {model_id}")
     
     # Use reduction='none' to get per-sample losses, then apply weighted averaging
-    # This is mathematically equivalent to subset training when weights are 0/1
     criterion_no_reduction = CrossEntropyLoss(reduction='none')
 
     model.train()
@@ -393,28 +246,43 @@ def train_model_on_subset(model_id: int, train_subset_indices: np.ndarray, devic
     
     logger.debug(f"Starting training for LDS model {model_id} with subset of {num_active_samples_in_subset} samples")
     
+    # TRAINING LOOP: Implement A(w) - the learning algorithm
     for epoch in range(epochs):
+        # CRITICAL: Update dataloader epoch for deterministic shuffling
+        # This ensures IDENTICAL data ordering as MAGIC analysis
+        update_dataloader_epoch(shared_train_loader, epoch)
+        
         epoch_samples_used = 0
-        for images, labels, original_indices in tqdm(shared_train_loader, desc=f"LDS Model {model_id}, Epoch {epoch+1}"):
+        for batch_idx, (images, labels, original_indices) in enumerate(tqdm(shared_train_loader, desc=f"LDS Model {model_id}, Epoch {epoch+1}")):
             images, labels, original_indices = images.to(device), labels.to(device), original_indices.to(device)
 
-            # Key mechanism: Use weights to select only subset samples
+            # CORE SUBSET MECHANISM: Apply data weights to implement subset training
+            # This is the key innovation - instead of creating separate datasets, we use weighted loss
             active_weights_in_batch = data_weights_for_subset[original_indices]
             sum_active_weights_in_batch = active_weights_in_batch.sum()
 
-            if sum_active_weights_in_batch == 0: # Skip batch if no samples from subset
+            # Skip batch if no samples from current subset are present
+            if sum_active_weights_in_batch == 0: 
                 continue
 
+            # STANDARD TRAINING STEP with weighted loss
+            # The global RNG state evolves naturally, ensuring stochastic operations (like dropout)
+            # behave consistently with MAGIC's training process
             optimizer.zero_grad()
             outputs = model(images)
             per_sample_loss = criterion_no_reduction(outputs, labels)
             
-            # Weighted loss: only samples from the current model's subset contribute
-            # This is equivalent to MAGIC's mean loss but only over the subset samples
-            weighted_loss = (per_sample_loss * active_weights_in_batch).sum() / (sum_active_weights_in_batch + 1e-8)
+            # WEIGHTED LOSS: Only samples from the current model's subset contribute
+            # This implements training on the subset defined by weight vector w
+            # Equivalent to MAGIC's mean loss but only over the subset samples
+            weighted_loss = (per_sample_loss * active_weights_in_batch).sum() / (sum_active_weights_in_batch + config.EPSILON_FOR_WEIGHTED_LOSS)
             
             weighted_loss.backward()
             optimizer.step()
+            
+            # CRITICAL FIX: Apply scheduler AFTER optimizer.step() to match MAGIC's training order
+            if scheduler:
+                scheduler.step()
             
             total_batches_processed += 1
             batch_samples_used = sum_active_weights_in_batch.item()
@@ -432,29 +300,42 @@ def train_model_on_subset(model_id: int, train_subset_indices: np.ndarray, devic
 
 
 def evaluate_and_save_losses(model: torch.nn.Module, model_id: int, device: torch.device, 
-                             losses_dir: Optional[Path] = None, batch_size: Optional[int] = None) -> np.ndarray:
+                             val_loader: torch.utils.data.DataLoader,  # Added val_loader parameter
+                             losses_dir: Optional[Path] = None) -> np.ndarray: # Removed batch_size, not needed if loader is pre-created
+    """
+    Evaluate a trained LDS model and compute per-sample validation losses.
+    
+    ALGORITHMIC PURPOSE:
+    Implements the measurement function φ(θ) that maps trained model parameters θ to a scalar metric.
+    Combined with training, this completes the model output function f(w) = φ(A(w)).
+    
+    THEORETICAL CONTEXT:
+    In LDS validation:
+    - Input: Trained model parameters θ (from train_model_on_subset)
+    - Process: φ(θ) → evaluate model on validation set
+    - Output: Per-sample losses, specifically loss on target validation image
+    
+    The target validation image loss will be used as f(w) in the LDS correlation analysis.
+    
+    Args:
+        model: Trained PyTorch model to evaluate
+        model_id: Unique identifier for this LDS model
+        device: Computing device (CPU/GPU)
+        val_loader: Validation dataloader (shared across all LDS models)
+        losses_dir: Directory to save per-sample losses
+        
+    Returns:
+        numpy array of per-sample validation losses
+    """
     if losses_dir is None: losses_dir = config.LDS_LOSSES_DIR
-    if batch_size is None: batch_size = config.LDS_MODEL_TRAIN_BATCH_SIZE # Using train batch size for eval loader
+    # batch_size parameter is removed as val_loader is now passed in.
     losses_dir.mkdir(parents=True, exist_ok=True)
-    
-    # CRITICAL FIX: Set seeds before creating validation dataloader to ensure 
-    # consistent behavior across multiple model evaluations
-    logger.debug(f"Setting seeds before creating validation dataloader for model {model_id}")
-    set_seeds(config.SEED)
-    
-    val_loader = get_cifar10_dataloader(
-        batch_size=batch_size, 
-        root_path=config.CIFAR_ROOT, 
-        split='val', 
-        shuffle=False, 
-        augment=False,
-        num_workers=config.DATALOADER_NUM_WORKERS  # CRITICAL FIX: Add consistent num_workers
-    )
-    
+
     model.eval()
     all_losses_for_model = []
     criterion_no_reduction = CrossEntropyLoss(reduction='none')
 
+    # Compute per-sample validation losses - this implements φ(θ)
     with torch.no_grad():
         for images, labels, _ in tqdm(val_loader, desc=f"Evaluating LDS Model {model_id}"):
             images, labels = images.to(device), labels.to(device)
@@ -462,7 +343,9 @@ def evaluate_and_save_losses(model: torch.nn.Module, model_id: int, device: torc
             per_sample_loss = criterion_no_reduction(outputs, labels)
             all_losses_for_model.append(per_sample_loss.cpu().numpy())
     
+    # Concatenate all per-sample losses into a single array
     all_losses_for_model_np = np.concatenate(all_losses_for_model)
+    # Save for analysis and debugging
     loss_file_path = losses_dir / f'loss_lds_{model_id}.pkl'
     with open(loss_file_path, 'wb') as f:
         pickle.dump(all_losses_for_model_np, f)
@@ -472,26 +355,43 @@ def evaluate_and_save_losses(model: torch.nn.Module, model_id: int, device: torc
 
 def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]] = None) -> None:
     """
-    Main function to run the LDS (Label Smoothing with Data Subsampling like) validation.
-    Trains multiple models on subsets of data, evaluates them, and correlates their
-    performance with pre-computed influence scores (from MAGIC analysis).
+    Main function to run Linear Datamodeling Score (LDS) validation of MAGIC influence scores.
+    
+    ALGORITHMIC PURPOSE:
+    Implements the complete LDS evaluation methodology to validate predictive data attribution.
+    This is the gold standard for testing whether influence scores can actually predict
+    how changes in training data affect model behavior.
+    
+    THEORETICAL FRAMEWORK:
+    1. Generate n random data subsets (weight vectors w^(1), ..., w^(n))
+    2. For each subset i:
+       a) Train model on subset → get true performance f(w^(i))
+       b) Use MAGIC scores to predict performance f̃(w^(i))
+    3. Compute LDS = Spearman_correlation({f̃(w^(i))}, {f(w^(i))})
+    
+    HIGH LDS → MAGIC accurately predicts data-model relationships
+    LOW LDS → MAGIC predictions are unreliable
+    
+    IMPLEMENTATION OVERVIEW:
+    - Phase 1: Generate training subsets and shared infrastructure
+    - Phase 2: Train multiple models on different subsets
+    - Phase 3: Evaluate all models on validation set
+    - Phase 4: Correlate MAGIC predictions with actual performance
+    
     Args:
-        precomputed_magic_scores_path (Path, optional): Path to .pkl file containing
-            influence scores from magic_analyzer. If None, LDS cannot run correlation.
+        precomputed_magic_scores_path: Path to MAGIC influence scores file
+                                     If None, uses default path from config
     """
     
     warnings.filterwarnings('ignore')
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device} for LDS Validation")
 
-    # CRITICAL: Verify data ordering consistency with MAGIC analyzer
-    if not verify_data_ordering_consistency():
-        logger.error("Data ordering verification failed! LDS validation results may be invalid.")
-        logger.error("Please check data loading configuration and ensure consistent settings.")
-        raise RuntimeError("Data ordering mismatch between MAGIC and LDS - cannot proceed with validation")
+    # === PHASE 1: SETUP AND SUBSET GENERATION ===
+    logger.info("=== PHASE 1: Generating Training Subsets ===")
     
-    # 1. Generate or Load Training Subset Indices
-    # These are lists of indices, each list defining a training subset for one LDS model
+    # Generate random subsets for LDS validation
+    # Each subset represents a different "dataset" defined by its weight vector w^(i)
     list_of_subset_indices = generate_and_save_subset_indices()
     
     # Log subset information for transparency
@@ -499,16 +399,16 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
     logger.info(f"Each subset contains {len(list_of_subset_indices[0])} samples ({config.LDS_SUBSET_FRACTION:.1%} of {config.NUM_TRAIN_SAMPLES} total)")
     logger.info(f"Training {config.LDS_NUM_MODELS_TO_TRAIN} LDS models using these subsets")
 
-    # CRITICAL FIX: Create ONE shared dataloader that all LDS models will use
-    # This ensures ALL models see the EXACT same data sequence as MAGIC
-    # MUST reset seeds before creating shared dataloader because verification function
-    # consumed random numbers, changing the PyTorch random state
+    # CRITICAL: Create shared dataloader with EXACT same settings as MAGIC
+    # This ensures ALL LDS models see the EXACT same data sequence as MAGIC analysis
+    # Maintaining data ordering consistency is essential for valid comparison
     logger.info("Creating shared dataloader with EXACT same settings as MAGIC...")
-    logger.debug("Resetting seeds before shared dataloader creation to match MAGIC's dataloader state")
-    set_seeds(config.SEED)  # CRITICAL: Reset to same state as MAGIC dataloader creation
     
-    shared_train_loader = get_cifar10_dataloader(
-        batch_size=config.LDS_MODEL_TRAIN_BATCH_SIZE,
+    shared_train_loader = create_deterministic_dataloader(
+        master_seed=config.SEED,
+        creator_func=get_cifar10_dataloader,
+        instance_id=config.SHARED_DATALOADER_INSTANCE_ID,  # CRITICAL: Same instance_id as MAGIC (from config)
+        batch_size=config.MODEL_TRAIN_BATCH_SIZE,
         split='train',
         shuffle=True,  # Same as MAGIC
         augment=False,  # Same as MAGIC
@@ -516,7 +416,25 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
         root_path=config.CIFAR_ROOT
     )
     
-    # 2. Train Multiple Models on Subsets and Evaluate
+    # Create a single, shared validation dataloader for consistent evaluation
+    logger.info("Creating shared validation dataloader...")
+    shared_val_loader = create_deterministic_dataloader(
+        master_seed=config.SEED,
+        creator_func=get_cifar10_dataloader,
+        instance_id="lds_shared_eval_loader", # Consistent instance_id for shared val loader
+        batch_size=config.MODEL_TRAIN_BATCH_SIZE, # Or a specific eval_batch_size from config
+        root_path=config.CIFAR_ROOT,
+        split='val',
+        shuffle=False,
+        augment=False,
+        num_workers=config.DATALOADER_NUM_WORKERS
+    )
+
+    # === PHASE 2: TRAIN MODELS ON SUBSETS ===
+    logger.info("=== PHASE 2: Training LDS Models on Subsets ===")
+    
+    # This implements the core LDS procedure: train multiple models on different subsets
+    # Each model represents f(w^(i)) for a different weight vector w^(i)
     all_validation_losses_stacked = [] # To store losses from all LDS models
     for i in tqdm(range(config.LDS_NUM_MODELS_TO_TRAIN), desc="Training LDS Models"):
         model_id = i
@@ -524,24 +442,23 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
         
         logger.info(f"--- Training LDS Model {model_id} on subset of size {len(current_subset_indices)} ---")
         
-        # CRITICAL FIX: Set seeds before EACH model creation to ensure identical initialization
-        # All models will have identical initialization, differing only in training subsets
-        logger.debug(f"Setting seeds to {config.SEED} for consistent model {model_id} initialization...")
-        set_seeds(config.SEED)
-        
+        # Train model on current subset - implements A(w^(i)) → θ^(i)
         trained_model = train_model_on_subset(
             model_id=model_id,
             train_subset_indices=current_subset_indices,
             device=device,
             shared_train_loader=shared_train_loader,  # CRITICAL: Same dataloader for all models
-            checkpoints_dir=config.LDS_CHECKPOINTS_DIR,
-            epochs=config.LDS_MODEL_TRAIN_EPOCHS,
-            lr=config.LDS_MODEL_TRAIN_LR,
-            momentum=config.LDS_MODEL_TRAIN_MOMENTUM,
-            weight_decay=config.LDS_MODEL_TRAIN_WEIGHT_DECAY
+            epochs=config.MODEL_TRAIN_EPOCHS,
+            lr=config.MODEL_TRAIN_LR,
+            momentum=config.MODEL_TRAIN_MOMENTUM,
+            weight_decay=config.MODEL_TRAIN_WEIGHT_DECAY
         )
+        
+        # Evaluate model on validation set - implements φ(θ^(i)) → f(w^(i))
         per_sample_val_losses = evaluate_and_save_losses(
-            trained_model, model_id, device, losses_dir=config.LDS_LOSSES_DIR
+            trained_model, model_id, device, 
+            val_loader=shared_val_loader,  # Pass the shared val_loader
+            losses_dir=config.LDS_LOSSES_DIR
         )
         all_validation_losses_stacked.append(per_sample_val_losses)
     
@@ -549,23 +466,29 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
         logger.warning("No LDS models were trained or evaluated. Skipping correlation.")
         return
 
+    # === PHASE 3: ORGANIZE EVALUATION RESULTS ===
+    logger.info("=== PHASE 3: Organizing Evaluation Results ===")
+    
     # Stack losses: rows are models, columns are validation samples
-    lds_validation_margins = np.stack(all_validation_losses_stacked) # Shape: (LDS_NUM_MODELS, NUM_TEST_SAMPLES)
+    # Shape: (LDS_NUM_MODELS, NUM_VALIDATION_SAMPLES)
+    lds_validation_margins = np.stack(all_validation_losses_stacked)
+    logger.info(f"Collected validation losses from {lds_validation_margins.shape[0]} LDS models on {lds_validation_margins.shape[1]} validation samples")
 
     # Validate target index is within bounds of validation data
     num_val_samples = lds_validation_margins.shape[1]
     if config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION >= num_val_samples or config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION < 0:
         raise ValueError(f"LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION ({config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION}) is out of bounds for validation dataset (size: {num_val_samples})")
 
-    # 3. Correlation with MAGIC Influence Scores
-    # Use the path from config if precomputed_magic_scores_path is not provided directly
+    # === PHASE 4: CORRELATION WITH MAGIC INFLUENCE SCORES ===
+    logger.info("=== PHASE 4: Correlating with MAGIC Influence Scores ===")
+    
+    # Load MAGIC influence scores for correlation analysis
     magic_scores_file_to_load = precomputed_magic_scores_path
     if magic_scores_file_to_load is None:
         # Use the default MAGIC scores file path from config
         magic_scores_file_to_load = config.MAGIC_SCORES_FILE_FOR_LDS_INPUT
 
     if not magic_scores_file_to_load.exists():
-        # Corrected variable name in f-string
         logger.warning(f"MAGIC scores file not found at {magic_scores_file_to_load}. Skipping correlation analysis.")
         return
 
@@ -573,6 +496,7 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
     with open(magic_scores_file_to_load, 'rb') as f:
         loaded_scores = pickle.load(f)
     
+    # Handle different MAGIC score formats
     if loaded_scores.ndim == 2: # Per-step scores [num_steps, num_train_samples]
         magic_influence_estimates = loaded_scores.sum(axis=0)
         logger.info(f"Summed per-step MAGIC scores (shape {loaded_scores.shape}) to flat scores (shape {magic_influence_estimates.shape}).")
@@ -582,7 +506,9 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
     else:
         raise ValueError(f"Loaded MAGIC scores from {magic_scores_file_to_load} have unexpected shape: {loaded_scores.shape}")
 
-    # Create mask array for which training samples were used by each LDS model
+    # Create binary mask arrays indicating which training samples were used by each LDS model
+    # This represents the weight vectors w^(1), w^(2), ..., w^(n) used in LDS
+    logger.info("Creating training subset masks for correlation analysis...")
     lds_train_masks_list = []
     for i in range(config.LDS_NUM_MODELS_TO_TRAIN):
         current_subset_indices = list_of_subset_indices[i % len(list_of_subset_indices)]
@@ -592,19 +518,35 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
     # Shape: (LDS_NUM_MODELS, NUM_TRAINING_SAMPLES)
     lds_training_data_masks = np.stack(lds_train_masks_list)
 
-    # Predict margin/loss change based on influence scores: sum of influences of samples in each subset
-    # This projects the influence scores of all training samples onto the subsets used to train each of the LDS models.
-    # `predicted_loss_impact_on_target` for each LDS model based on its training subset and MAGIC scores.
+    # CORE LDS COMPUTATION: Predict performance using MAGIC influence scores
+    # For each LDS model, sum the MAGIC influence scores of samples in its training subset
+    # This implements f̃(w^(i)) = Σ_{j ∈ subset_i} influence_score_j
+    logger.info("Computing predicted performance using MAGIC influence scores...")
     predicted_loss_impact_on_target = lds_training_data_masks @ magic_influence_estimates.T
     # Shape: (LDS_NUM_MODELS_TO_TRAIN,)
+    logger.info(f"Computed MAGIC-based predictions for {len(predicted_loss_impact_on_target)} LDS models")
 
-    # Select the actual validation losses for the specific target image used in MAGIC analysis
+    # Extract actual validation losses for the specific target image used in MAGIC analysis
+    # This gives us the true model outputs f(w^(i)) for correlation
     actual_margins_for_target_val_image = lds_validation_margins[:, config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION]
     # Shape: (LDS_NUM_MODELS_TO_TRAIN,)
+    logger.info(f"Extracted actual losses on target validation image {config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION}")
     
+    # === FINAL LDS COMPUTATION ===
+    logger.info("=== Computing Linear Datamodeling Score (LDS) ===")
+    
+    # Compute Spearman rank correlation between predicted and actual performance
+    # This is the core LDS metric: how well do MAGIC scores predict model behavior changes?
+    correlation, p_value = spearmanr(predicted_loss_impact_on_target, actual_margins_for_target_val_image)
+    
+    logger.info(f"LDS Correlation Results:")
+    logger.info(f"  Spearman R: {correlation:.3f}")
+    logger.info(f"  P-value: {p_value:.3g}")
+    logger.info(f"  Interpretation: {'Strong' if abs(correlation) > 0.7 else 'Moderate' if abs(correlation) > 0.4 else 'Weak'} correlation")
+    
+    # Create visualization of LDS results
     plt.figure(figsize=(8, 6))
     sns.regplot(x=predicted_loss_impact_on_target, y=actual_margins_for_target_val_image)
-    correlation, p_value = spearmanr(predicted_loss_impact_on_target, actual_margins_for_target_val_image)
     plt.title(f'LDS Validation: Correlation with MAGIC Scores\nTarget Val Img Idx: {config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION}\nSpearman R: {correlation:.3f} (p={p_value:.3g})')
     plt.xlabel("Predicted Loss Impact (Sum of MAGIC scores in subset)")
     plt.ylabel(f"Actual Loss on Val Img {config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION}")
@@ -616,36 +558,16 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
     plt.show()
 
     logger.info(f"LDS Validation finished. Correlation: {correlation:.3f}")
-
-"""
-# Standalone execution block - deprecated. Use main_runner.py instead.
-if __name__ == "__main__":
-    # from .config import ensure_output_dirs_exist, MAGIC_SCORES_DIR, MAGIC_TARGET_VAL_IMAGE_IDX
-    # ensure_output_dirs_exist() # This function is removed from config.py
     
-    # # Determine the path to the MAGIC scores file needed by LDS
-    # # This assumes magic_analyzer.py has been run and produced the scores for the target val image.
-    # # The path construction and default logic is now better handled in main_runner.py and config.py
-
-    # print("Running LDS Validator directly is deprecated. Please use main_runner.py.")
-    # print("If you need to test LDS validation in isolation, ensure MAGIC scores are present at the expected path.")
+    # === INTERPRETATION GUIDE ===
+    logger.info("=== LDS Results Interpretation ===")
+    if correlation > 0.7:
+        logger.info("✅ EXCELLENT: MAGIC scores strongly predict model behavior changes")
+    elif correlation > 0.4:
+        logger.info("✅ GOOD: MAGIC scores moderately predict model behavior changes")
+    elif correlation > 0.2:
+        logger.info("⚠️  WEAK: MAGIC scores weakly predict model behavior changes")
+    else:
+        logger.info("❌ POOR: MAGIC scores do not reliably predict model behavior changes")
     
-    # Example of how it might be called if paths were manually set up:
-    # from . import config
-    # config.LDS_PLOTS_DIR.mkdir(parents=True, exist_ok=True)
-    # config.LDS_LOSSES_DIR.mkdir(parents=True, exist_ok=True)
-    # config.LDS_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    # if config.LDS_INDICES_FILE:
-    #     config.LDS_INDICES_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    # # This path should align with what MagicAnalyzer produces and what LdsValidator expects by default via config.
-    # magic_scores_file_for_direct_run = config.MAGIC_SCORES_FILE_FOR_LDS_INPUT
-    
-    # if not magic_scores_file_for_direct_run.exists():
-    #     print(f"Expected MAGIC scores file not found: {magic_scores_file_for_direct_run}")
-    #     print("Please run MAGIC analysis via main_runner.py first or ensure the file exists.")
-    # else:
-    #     print(f"Attempting to run LDS validation with scores from: {magic_scores_file_for_direct_run}")
-    #     run_lds_validation(precomputed_magic_scores_path=magic_scores_file_for_direct_run)
-    pass # Deprecated
-""" 
+    logger.info("Higher LDS correlation indicates better predictive data attribution quality.")
