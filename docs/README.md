@@ -9,6 +9,7 @@ Welcome to the documentation for the REPLAY Influence Analysis project.
 
 ### 🔧 [Technical Documentation](technical/)
 - **[REPLAY Algorithm Analysis](technical/comprehensive-analysis.md)** - Complete technical analysis with seed management
+- **[Influence Replay Algorithm Deep Dive](technical/influence-replay-algorithm.md)** - Detailed step-by-step explanation of the influence replay algorithm and its implementation.
 - **[ResNet-9 Implementation Guide](technical/resnet9-implementation.md)** - Complete ResNet-9 documentation
 
 ### 🏆 [Quality Assurance](quality/)

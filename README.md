@@ -43,7 +43,7 @@ The system uses **CIFAR-10 dataset** and **ResNet9 architecture** with **complet
 | Guide Type | Purpose | Key Documents |
 |------------|---------|---------------|
 | **Quick Start** | Get running fast | This README |
-| **Technical** | Implementation details | [Technical Analysis](docs/technical/comprehensive-analysis.md) |
+| **Technical** | Implementation details | [Technical Analysis](docs/technical/comprehensive-analysis.md)<br>[Influence Replay Algorithm Deep Dive](docs/technical/influence-replay-algorithm.md) |
 | **User Guides** | Practical usage | [Memory Efficient Mode](docs/guides/memory-efficient-replay.md) (Note: CLI flag for this is not currently exposed in `main_runner.py` for MAGIC) |
 | **Quality** | Testing & validation | [Quality Report](docs/quality/comprehensive-report.md) |
 
