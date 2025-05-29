@@ -33,7 +33,7 @@ from . import visualization
 # Expose key classes and functions for direct import
 from .magic_analyzer import MagicAnalyzer
 from .lds_validator import run_lds_validation
-from .model_def import construct_rn9
+from .model_def import construct_rn9, construct_resnet9_paper
 from .utils import (
     set_global_deterministic_state,
     derive_component_seed,
@@ -52,6 +52,7 @@ __all__ = [
     # Key functions
     "run_lds_validation",
     "construct_rn9",
+    "construct_resnet9_paper",
     "set_global_deterministic_state",
     "derive_component_seed",
     "create_deterministic_dataloader",

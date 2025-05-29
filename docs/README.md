@@ -1,205 +1,253 @@
-# 📚 **REPLAY Influence Analysis Documentation**
+# REPLAY Influence Analysis - Documentation
 
-**Welcome to the comprehensive documentation for the REPLAY Influence Analysis system** - a state-of-the-art implementation for computing influence functions in deep learning models with research-grade reproducibility and production-ready quality.
+Welcome to the documentation for the REPLAY Influence Analysis project.
 
----
+## 📚 Documentation Structure
 
-## 🎯 **Quick Navigation**
+### 🚀 [Quick Start Guides](guides/)
+- **[Memory-Efficient Replay Guide](guides/memory-efficient-replay.md)** - Memory optimization strategies (Conceptual: CLI flag not directly exposed for MAGIC in `main_runner.py`)
 
-| Section | Description | Key Files |
-|---------|-------------|-----------|
-| **[🔧 Technical](#-technical-documentation)** | Implementation details and analysis | [Comprehensive Analysis](technical/comprehensive-analysis.md) |
-| **[🏆 Quality](#-quality-assurance)** | Quality improvements and testing | [Quality Report](quality/comprehensive-report.md), [Testing Guide](quality/testing-guide.md) |
-| **[🌱 Seed Management](#-seed-management)** | Deterministic training system | [Overview](seed-management/overview.md), [Technical Details](seed-management/technical-implementation.md) |
-| **[📚 User Guides](#-user-guides)** | Getting started and configuration | Coming soon |
+### 🔧 [Technical Documentation](technical/)
+- **[REPLAY Algorithm Analysis](technical/comprehensive-analysis.md)** - Complete technical analysis with seed management
+- **[ResNet-9 Implementation Guide](technical/resnet9-implementation.md)** - Complete ResNet-9 documentation
 
----
+### 🏆 [Quality Assurance](quality/)
+- **[Comprehensive Quality Report](quality/comprehensive-report.md)** - System testing status
+- **[Testing Guide](quality/testing-guide.md)** - Test execution instructions
 
-## 📖 **Documentation Sections**
+## 🎯 **Quick Start**
 
-### 🔧 **Technical Documentation**
+### Basic Model Usage
 
-**Core technical analysis and implementation details for the REPLAY algorithm.**
+```python
+from src.model_def import construct_resnet9_paper
+from src.utils import create_deterministic_model
 
-- **[📋 Comprehensive Analysis](technical/comprehensive-analysis.md)** (21KB)
-  - Complete technical analysis of the REPLAY algorithm implementation
-  - Critical bug fixes and algorithmic improvements
-  - Research-grade seed management system
-  - Production-ready code quality enhancements
-  - **Status**: ✅ Production Ready with 4 Critical Bug Fixes
+# Create paper-compliant ResNet-9 model
+model = construct_resnet9_paper(num_classes=10)
 
-**Key Topics Covered:**
-- MAGIC momentum buffer timing fixes
-- Model creation consistency improvements
-- Complete optimizer & scheduler determinism
-- DataLoader worker handling
-- Research-grade seed management architecture
+# Or create deterministically for reproducible experiments
+model = create_deterministic_model(
+    master_seed=42,
+    creator_func=construct_resnet9_paper,
+    instance_id="my_experiment"
+)
+```
 
----
+### Running Analysis
+(Refer to the main project README.md for detailed CLI examples)
+```bash
+# Run MAGIC analysis
+python main_runner.py --magic
 
-### 🏆 **Quality Assurance**
+# Run LDS validation (requires a run_id with MAGIC scores)
+python main_runner.py --lds --run_id your_magic_run_id
+```
 
-**Quality improvements, testing procedures, and production readiness assessments.**
+## 🎯 **Key Features**
 
-- **[🏅 Comprehensive Quality Report](quality/comprehensive-report.md)** (Consolidated)
-  - Quality improvement initiative results
-  - Performance metrics and benchmarks
-  - Type safety and error handling enhancements
-  - Package management and development infrastructure
-  - **Status**: ✅ 100% Test Coverage - 7/7 Tests Passed
+### ✅ **ResNet-9 Paper Implementation**
+- Paper-compliant 14.2M parameter model (Note: actual params depend on `MODEL_CREATOR_FUNCTION`)
+- Proper parameter grouping with bias scaling
+- LogSumExp pooling implementation
 
-- **[🧪 Testing Guide](quality/testing-guide.md)** (11KB)
-  - Complete testing procedures and best practices
-  - Test structure and organization
-  - Helper functions and utilities
-  - Continuous integration guidelines
-  - **Status**: ✅ 11/11 Tests Passing (100% Success Rate)
+### ✅ **Research-Grade Determinism**
+- Component-specific seed derivation using SHA256
+- Perfect MAGIC/LDS consistency verification
+- Comprehensive DataLoader worker handling
 
-**Key Quality Metrics:**
-- **Type Coverage**: 100% - Complete type annotations
-- **Test Coverage**: 100% - All critical paths tested
-- **Performance**: 11% memory efficiency improvement
-- **Error Handling**: Enterprise-grade robustness
+### ✅ **Production Quality**
+- Comprehensive test suite covering core functionality
+- Complete type annotations
+- Memory-efficient replay mode (developer-configurable in `MagicAnalyzer`)
+- Robust error handling and detailed logging
 
----
+## 📁 **Source Code Organization**
 
-### 🌱 **Seed Management**
+- **Core Algorithm** (`src/magic_analyzer.py`) - Main REPLAY implementation
+- **Validation** (`src/lds_validator.py`) - LDS validator for verification
+- **Models** (`src/model_def.py`) - ResNet-9 implementations
+- **Configuration** (`src/config.py`) - Centralized settings (constants, hyperparameters)
+- **Run Management** (`src/run_manager.py`) - Handles creation and tracking of experiment runs and paths
+- **Utilities** (`src/utils.py`) - Deterministic training utilities, helper functions
 
-**Advanced deterministic training system with modern best practices.**
+## 📋 **Documentation Reference**
 
-- **[📋 Overview](seed-management/overview.md)** (Consolidated Summary)
-  - Executive summary of seed management achievements
-  - Quick start guide and usage patterns
-  - Performance impact and research validation
-  - Actionable recommendations
-  - **Status**: ✅ Gold Standard Implementation
+- **[REPLAY Algorithm Analysis](technical/comprehensive-analysis.md)** - Complete technical details and algorithm fixes
+- **[ResNet-9 Implementation Guide](technical/resnet9-implementation.md)** - Paper-compliant architecture details
+- **[Memory-Efficient Replay Guide](guides/memory-efficient-replay.md)** - Performance optimization strategies
+- **[Quality Report](quality/comprehensive-report.md)** - System status and test results
+- **[Testing Guide](quality/testing-guide.md)** - Test execution and validation procedures
 
-- **[🔧 Technical Implementation](seed-management/technical-implementation.md)** (Consolidated Details)
-  - Detailed technical architecture and implementation
-  - Component-specific seed derivation with SHA256
-  - Deterministic context management
-  - Advanced features and research validation
-  - **Status**: ✅ Research-Grade Implementation
+## ⚙️ Configuration
 
-**Key Features:**
-- **SHA256-based seed derivation** for component isolation
-- **Research-grade deterministic context management**
-- **PyTorch 2.2+ compatibility** with modern features
-- **Perfect MAGIC/LDS consistency** patterns
-- **Production-ready error handling**
+Key settings for hyperparameters, seeds, and model choices are primarily in `src/config.py`.
+Run-specific directory and file path generation is handled by `src/run_manager.py`.
 
----
+## 🎯 Key Features Documented
 
-### 📚 **User Guides**
+### ✅ **Implementation Features**
+- **Comprehensive test suite** covering functionality and robustness
+- **Error handling** with validation and logging
+- **CLI interface** with workflow orchestration via `main_runner.py`
 
-**Getting started guides and configuration documentation.**
+### ✅ **Security & Testing Features**
+- Path traversal prevention and input sanitization considerations
+- Numerical stability testing and NaN/Inf handling
 
-*Coming Soon - User-friendly guides for different use cases:*
+### ✅ **Performance Features**
+- Memory-efficient replay mode (developer-configurable)
+- Deterministic operations for reproducible results
+- Resource utilization monitoring and cleanup validation
 
-- **Getting Started** - Quick setup and first analysis
-- **Configuration** - Detailed configuration options
-- **Troubleshooting** - Common issues and solutions
+## 📖 Quick Navigation
 
----
+### For New Users
+1. Start with **[ResNet-9 Implementation Guide](technical/resnet9-implementation.md)** for model architecture details
+2. Review **[Testing Guide](quality/testing-guide.md)** for validation information
+3. Check **[Comprehensive Quality Report](quality/comprehensive-report.md)** for testing details
 
-## 🚀 **Quick Start**
+### For Developers
+1. **[REPLAY Algorithm Analysis](technical/comprehensive-analysis.md)** - Technical implementation details
+2. **[Testing Guide](quality/testing-guide.md)** - Test suite organization and execution
 
-### **For New Users**
-1. **Start with**: [Seed Management Overview](seed-management/overview.md) for key concepts
-2. **Then read**: [Testing Guide](quality/testing-guide.md) to understand the system
-3. **Deep dive**: [Technical Implementation](seed-management/technical-implementation.md) for details
+### For Usage
+1. **[Comprehensive Quality Report](quality/comprehensive-report.md)** - Testing and validation information
+2. **[Memory-Efficient Replay Guide](guides/memory-efficient-replay.md)** - Performance optimization
+3. **[Testing Guide](quality/testing-guide.md)** - Test execution instructions
 
-### **For Developers**
-1. **Review**: [Comprehensive Quality Report](quality/comprehensive-report.md) for code standards
-2. **Understand**: [Comprehensive Analysis](technical/comprehensive-analysis.md) for implementation
-3. **Test**: [Testing Guide](quality/testing-guide.md) for development workflow
+## 🏗️ System Architecture Overview
 
-### **For Researchers**
-1. **Study**: [Technical Implementation](seed-management/technical-implementation.md) for reproducibility
-2. **Validate**: [Comprehensive Analysis](technical/comprehensive-analysis.md) for algorithmic correctness
-3. **Benchmark**: [Quality Report](quality/comprehensive-report.md) for performance metrics
+The REPLAY Influence Analysis system consists of several key components:
 
----
+### **Core Components**
+- **MAGIC Analyzer** (`src/magic_analyzer.py`) - Influence function computation with replay
+- **LDS Validator** (`src/lds_validator.py`) - Linear Datamodeling Score validation system
+- **Model Definitions** (`src/model_def.py`) - ResNet-9 and other model implementations
+- **Configuration Management** (`src/config.py`) - Centralized settings (constants, hyperparameters)
+- **Run Management** (`src/run_manager.py`) - Handles creation and tracking of experiment runs and paths
+- **Utilities** (`src/utils.py`) - Deterministic operations and helper functions
 
-## 📊 **Documentation Statistics**
-
-### **Before Consolidation**
-- **Total Files**: 9 markdown files (~110KB)
-- **Redundancy**: 60-70% overlapping content
-- **Maintenance**: High burden (5+ files to update)
-
-### **After Consolidation**
-- **Total Files**: 4 focused documents (~50KB)
-- **Redundancy**: <10% minimal overlap
-- **Maintenance**: Low burden (focused updates)
-- **Size Reduction**: 55% smaller while preserving all content
-
----
-
-## 🎯 **Key Achievements Documented**
-
-### **Technical Excellence**
-- ✅ **4 Critical Bug Fixes** in REPLAY algorithm implementation
-- ✅ **Research-Grade Seed Management** with modern best practices
-- ✅ **Complete SGD Feature Support** with deterministic training
-- ✅ **Production-Ready Architecture** with modular design
-
-### **Quality Standards**
-- ✅ **100% Type Coverage** with comprehensive annotations
-- ✅ **100% Test Coverage** with 11/11 tests passing
-- ✅ **Enterprise-Grade Error Handling** with specific exceptions
-- ✅ **Performance Optimization** with 11% memory improvement
-
-### **Research Impact**
-- ✅ **Superior to Current Standards** in seed management
-- ✅ **Reference Implementation** for deterministic training
-- ✅ **Publication-Ready Quality** for scientific papers
-- ✅ **Community Contribution** potential for open source
-
----
-
-## 🔗 **Cross-References**
-
-### **Related Topics**
-- **Seed Management** ↔ **Technical Analysis**: Deterministic training implementation
-- **Quality Report** ↔ **Testing Guide**: Quality assurance procedures
-- **Technical Analysis** ↔ **Quality Report**: Production readiness features
-
-### **External Resources**
-- **PyTorch Reproducibility Guide**: Referenced in seed management docs
-- **Research Papers**: Validated against in technical implementation
-- **Production ML Standards**: Compliance documented in quality report
-
----
-
-## 📝 **Contributing to Documentation**
+### **Quality Assurance**
+- **Integration tests** covering core workflows and component interactions
+- **Numerical stability** checks and NaN/Inf handling
+- **Workflow validation** including error recovery in `main_runner.py`
 
 ### **Documentation Standards**
-- **Clear Structure**: Logical progression from overview to details
-- **Comprehensive Coverage**: All features and improvements documented
-- **Cross-References**: Links between related sections
-- **Regular Updates**: Keep documentation current with code changes
+- **Technical specifications** for implementations
+- **Usage examples** (see main project README.md for CLI)
+- **Troubleshooting guides**
 
-### **Maintenance Guidelines**
-- **Single Source of Truth**: Each topic has one authoritative document
-- **Focused Content**: Each file has clear, distinct purpose
-- **Version Control**: Track changes by topic area
-- **Quality Checks**: Verify links and references regularly
+## 🎯 Usage Examples
+
+### Basic ResNet-9 Model Usage
+```python
+from src.model_def import construct_resnet9_paper # Example model
+from src.utils import create_deterministic_model
+from src import config # To access config.NUM_CLASSES
+
+# Create a model (e.g., paper-compliant ResNet-9)
+model = construct_resnet9_paper(num_classes=config.NUM_CLASSES)
+
+# Create deterministically for reproducible experiments
+deterministic_model = create_deterministic_model(
+    master_seed=config.SEED,
+    creator_func=construct_resnet9_paper, # or any other model creator from model_def.py
+    instance_id="my_experiment_model",
+    num_classes=config.NUM_CLASSES # Ensure num_classes is passed if required by creator_func
+)
+```
+
+### Complete Analysis Workflow (via CLI)
+(Refer to the main project README.md for detailed and up-to-date CLI examples)
+```bash
+# Run complete MAGIC analysis (creates a new run)
+python main_runner.py --magic
+
+# Run LDS validation on an existing MAGIC run
+python main_runner.py --lds --run_id <your_magic_run_id>
+
+# View configuration
+python main_runner.py --show_config
+```
+
+### Running Tests
+```bash
+# Run all tests (ensure pytest and plugins like pytest-cov are installed)
+pytest
+
+# Example: Run integration tests with verbose output
+pytest tests/integration -v
+
+# Generate coverage report (example)
+pytest --cov=src --cov-report=html
+```
+
+## 📊 System Information
+
+### **Test Coverage**
+- **Integration Tests**: Validate component interactions and core workflows.
+- (Refer to `pytest.ini` and test execution reports for detailed coverage metrics).
+
+### **Testing Categories**
+- **Functionality testing** for core algorithms (MAGIC, LDS).
+- **Determinism validation** for reproducible outputs.
+- **Configuration validation** and error handling.
+- **Integration testing** for component interactions and run management.
+
+## 🔄 Test Execution
+
+### **Running Tests**
+```bash
+# Complete test suite (from project root)
+pytest
+
+# Generate HTML coverage report
+pytest --cov=src --cov-report=html
+
+# Run tests for a specific file
+pytest tests/integration/test_run_management.py -v
+```
+
+### **Test Organization**
+- Automated testing for algorithm correctness and workflow validation.
+- Determinism checks for models, dataloaders, optimizers.
+- Run management CLI interactions.
+
+## 🎓 Learning Resources
+
+### **For Research**
+- **[REPLAY Algorithm Analysis](technical/comprehensive-analysis.md)** - Technical details and algorithm fixes
+- **[ResNet-9 Implementation Guide](technical/resnet9-implementation.md)** - Architecture details
+
+### **For Development**
+- **[Testing Guide](quality/testing-guide.md)** - Testing standards and execution
+- **[Quality Report](quality/comprehensive-report.md)** - Code quality information
+
+### **For Implementation**
+- **Testing and validation procedures** for safe operation
+- **Performance optimization guidelines** (conceptual, e.g., memory efficiency)
+- **Configuration management** for reproducible experiments (`src/config.py`)
+
+## 🤝 Contributing
+
+To contribute to the documentation:
+
+1. **Follow the established structure** in the appropriate directory (`docs/guides`, `docs/technical`, `docs/quality`).
+2. **Use consistent formatting** (Markdown) with existing documentation.
+3. **Include code examples** where relevant, ensuring they are up-to-date with `main_runner.py` and `src/` APIs.
+4. **Test all examples** to ensure they work correctly.
+5. **Update this README** (`docs/README.md`) or the main project `README.md` when adding new sections or making significant changes to CLI/usage.
+
+## 📞 Support
+
+For questions about the documentation:
+- Check the relevant section first (technical, quality, guides).
+- Review the **[Testing Guide](quality/testing-guide.md)** for validation procedures.
+- Consult the **[Comprehensive Quality Report](quality/comprehensive-report.md)** for production guidelines.
 
 ---
 
-## 🎉 **Conclusion**
-
-This documentation represents a **comprehensive knowledge base** for the REPLAY Influence Analysis system, covering everything from quick start guides to deep technical implementation details. The organized structure ensures that users can find the information they need quickly while maintaining the depth required for research and production use.
-
-**The documentation is now ready for:**
-- ✅ **Production deployment** with complete technical guides
-- ✅ **Scientific publication** with research-grade documentation
-- ✅ **Open source distribution** with professional standards
-- ✅ **Educational use** with clear learning progression
-
----
-
-**Last Updated**: December 2024  
-**Documentation Version**: 1.0  
-**System Status**: ✅ Production Ready | ✅ Research Grade | ✅ Fully Documented 
+**Documentation Status**: 🚧 **Under Review & Update**
+**Last Updated**: May 2025
+**Coverage**: Core system components and workflows.
