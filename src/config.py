@@ -77,9 +77,9 @@ MAGIC_TARGET_VAL_IMAGE_IDX = 21 # QUICK TEST: Use index 21
 MAGIC_NUM_INFLUENTIAL_IMAGES_TO_SHOW = 8
 
 # Clipping options for MAGIC Replay
-MAGIC_REPLAY_ENABLE_GRAD_CLIPPING = True       # Enable/disable gradient clipping during replay
+MAGIC_REPLAY_ENABLE_GRAD_CLIPPING = False       # Enable/disable gradient clipping during replay
 MAGIC_REPLAY_MAX_GRAD_NORM = 0.5               # Max norm for gradients if clipping is enabled
-MAGIC_REPLAY_ENABLE_PARAM_CLIPPING = True      # Enable/disable parameter norm warning and hard clipping
+MAGIC_REPLAY_ENABLE_PARAM_CLIPPING = False      # Enable/disable parameter norm warning and hard clipping
 MAGIC_REPLAY_MAX_PARAM_NORM_WARNING = 5.0      # Threshold for parameter norm warnings if enabled
 MAGIC_REPLAY_PARAM_CLIP_NORM_HARD = 10.0       # Threshold for hard parameter norm clipping if enabled
 
@@ -97,13 +97,13 @@ PAPER_MEASUREMENT_TARGET_INDICES = list(range(PAPER_NUM_MEASUREMENT_FUNCTIONS)) 
 # These are used by both MAGIC and LDS for consistency
 # Updated to match ResNet-9 on CIFAR-10 specifications from [Jor24a]
 # and user-provided large-batch SGD recipe.
-MODEL_TRAIN_LR = 0.02  # Peak LR for OneCycleLR.
-MODEL_TRAIN_EPOCHS = 15 # Reduced for faster integration testing
+MODEL_TRAIN_LR = 1e-3  # Peak LR for OneCycleLR.
+MODEL_TRAIN_EPOCHS = 2 # Reduced for faster integration testing
 WARMUP_EPOCHS = 0       # OneCycleLR handles its own warmup via pct_start. Set to 0.
-MODEL_TRAIN_BATCH_SIZE = 1000
-MODEL_TRAIN_MOMENTUM = 0.875
-MODEL_TRAIN_WEIGHT_DECAY = 0.0001 # For parameters subject to decay
-MODEL_TRAIN_NESTEROV = True # Common with momentum, though not explicitly in table. User had it.
+MODEL_TRAIN_BATCH_SIZE = 256
+MODEL_TRAIN_MOMENTUM = 0
+MODEL_TRAIN_WEIGHT_DECAY = 0 # For parameters subject to decay
+MODEL_TRAIN_NESTEROV = False # Common with momentum, though not explicitly in table. User had it.
 
 # Optimizer Type ('SGD' or 'Adam')
 MODEL_TRAIN_OPTIMIZER = 'SGD'  # Reverted analyzer primarily supports SGD. Adam settings below are not used by it.
@@ -119,13 +119,13 @@ ADAM_EPSILON = 1e-8
 
 # === MODEL ARCHITECTURE CONFIGURATION ===
 # Allows for switching the model architecture by changing this function reference.
-MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = make_airbench94_adapted
+# MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = make_airbench94_adapted
 # To use the ResNet-9 based on the user's table interpretation:
 # MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = ResNet9TableArch
 # To use the original ResNet-9 paper implementation from this project:
 # MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_resnet9_paper
 # To use the alternative ResNet-9 implementation:
-# MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_rn9
+MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_rn9
 
 # Store the alternative for reference or programmatic switching if needed elsewhere
 # ALTERNATIVE_MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_rn9
@@ -142,7 +142,7 @@ RESNET9_POOLING_EPSILON = 0.1     # Epsilon for log-sum-exp pooling
 # Note: If WARMUP_EPOCHS > 0, the main scheduler (e.g., CosineAnnealingLR)
 # typically starts after WARMUP_EPOCHS. The training script should handle the
 # warmup phase (e.g., linear ramp-up) and then transition to this scheduler.
-LR_SCHEDULE_TYPE = 'OneCycleLR'
+LR_SCHEDULE_TYPE = None
 
 # StepLR parameters
 STEPLR_STEP_SIZE = 10 # Not used if OneCycleLR is active

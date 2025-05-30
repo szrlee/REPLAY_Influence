@@ -151,9 +151,9 @@ WARNING: Loaded batch_dict is from regular mode, but current mode is memory-effi
 ```
 **Solution**:
 - Always use the `--force` flag with `main_runner.py --magic` when you have changed the underlying mechanism for how `MagicAnalyzer` stores or expects replay states (e.g., by toggling `use_memory_efficient_replay` in the code that calls `MagicAnalyzer`). This ensures training/state collection is redone consistently.
-  ```bash
-  python main_runner.py --magic --force
-  ```
+```bash
+python main_runner.py --magic --force
+```
 
 #### **Missing Batch Files (If Memory-Efficient Mode Was Programmatically Enabled and Files Are Missing)**
 ```
@@ -164,10 +164,10 @@ RuntimeError: Missing batch files for memory-efficient replay. Example: ... batc
 1. Ensure the initial training/state collection phase completed successfully when memory-efficient mode was active.
 2. Verify that the `outputs/runs/<run_id>/checkpoints_magic/` directory contains the expected `batch_*.pkl` files.
 3. If files were deleted or the collection was incomplete, force retraining/re-collection of states:
-   ```bash
-   python main_runner.py --magic --force 
+```bash
+python main_runner.py --magic --force
    # (Ensure your code is set to use memory-efficient mode if that's intended for this run)
-   ```
+```
 
 #### **Slow Performance (If Memory-Efficient Mode is Programmatically Enabled)**
 Disk I/O for reading `batch_*.pkl` files can be a bottleneck.
@@ -299,7 +299,7 @@ If you modify `main_runner.py` or your programmatic script to change the `use_me
     ```
     If the run was interrupted, using `--force` might be necessary if artifacts are in an inconsistent state.
 5.  **If Artifacts are Suspect**: If you suspect corrupted artifacts (e.g., `magic_batch_dict.pkl` or batch files), it's often best to clean and restart the problematic part or the whole run.
-    ```bash
+   ```bash
     # Clean checkpoints for the run, then try again with --force
     python main_runner.py --clean --run_id <problem_run_id> --what checkpoints
     python main_runner.py --magic --force --run_id <problem_run_id>
@@ -307,7 +307,7 @@ If you modify `main_runner.py` or your programmatic script to change the `use_me
     # Or clean the entire run and start fresh
     # python main_runner.py --clean --run_id <problem_run_id> --what all
     # python main_runner.py --magic --run_id <problem_run_id_or_new>
-    ```
+   ```
 
 ### **If Running Out of Disk Space (Potentially with Memory-Efficient Mode Active)**
 1.  **Check Usage**: `du -sh outputs/`. Identify the largest run directories.
