@@ -252,16 +252,19 @@ def save_run_metadata(metadata: Dict[str, Any], run_dir: Optional[Path] = None) 
     if 'timestamp' not in metadata:
         metadata['timestamp'] = datetime.datetime.now().isoformat()
     
-    # Add configuration snapshot
-    if 'config' not in metadata:
-        # This needs project_config.get_current_config_dict() or similar
-        # For now, let's assume the caller provides this or it's handled differently.
-        # We cannot call get_current_config_dict from project_config directly here due to potential circular dependencies
-        # if project_config tries to import run_manager for its path functions.
-        # This will be resolved by moving path getters too or making config_dict more self-contained.
-        # pass # Placeholder - This was the old comment
-        metadata['config'] = project_config.get_current_config_dict()
-    
+    # Handle configuration snapshot
+    if 'config_snapshot' not in metadata:
+        if 'config' in metadata: # Check for the old key
+            metadata['config_snapshot'] = metadata.pop('config') # Move to new key and remove old
+            # Do not call get_current_config_dict() if we just moved an existing one
+        else:
+            # Neither 'config_snapshot' nor 'config' (old key) was present, so create a new snapshot
+            metadata['config_snapshot'] = project_config.get_current_config_dict()
+    elif 'config' in metadata and 'config_snapshot' in metadata:
+        # If by some chance both are present, 'config_snapshot' (the new standard) takes precedence.
+        # We can remove the old 'config' key to avoid confusion.
+        metadata.pop('config', None) # Remove 'config' if it exists, do nothing if not
+
     # Save metadata
     with open(metadata_file, 'w') as f:
         json.dump(metadata, f, indent=2, default=str)

@@ -8,6 +8,7 @@ import time
 import torch
 import pickle
 import sys
+import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -24,7 +25,7 @@ LATEST_LINK = OUTPUTS_DIR / "latest"
 
 # Define a marker for tests that modify the filesystem significantly
 # and might take longer.
-integration_test = pytest.mark.integration
+# integration_test = pytest.mark.integration # Old way
 
 @pytest.fixture(scope="function", autouse=True)
 def cleanup_runs_before_after_each_test():
@@ -65,7 +66,8 @@ def create_dummy_run_artifacts(
     create_batch_dict: bool = False,
     create_scores: bool = False,
     create_logs: bool = False,
-    create_losses: bool = False
+    create_losses: bool = False,
+    simulate_memory_efficient_batch_dict: bool = True
 ) -> Path:
     """Create dummy run artifacts for testing purposes."""
     # Update registry first
@@ -112,28 +114,42 @@ def create_dummy_run_artifacts(
     if create_scores:
         scores_dir = run_dir / "scores_magic"
         scores_dir.mkdir(parents=True, exist_ok=True)
-        with open(scores_dir / "magic_scores_val_21.pkl", 'wb') as f:
-            pickle.dump({'scores': [0.1, 0.2, 0.3]}, f)
+        # Save as a numpy array directly, not a dict
+        dummy_scores_array = np.array([0.1, 0.2, 0.3] * (project_config.NUM_TRAIN_SAMPLES // 3) + [0.1] * (project_config.NUM_TRAIN_SAMPLES % 3))
+        dummy_scores_array = dummy_scores_array[:project_config.NUM_TRAIN_SAMPLES] # Ensure correct length
+        with open(scores_dir / f"magic_scores_val_{project_config.MAGIC_TARGET_VAL_IMAGE_IDX}.pkl", 'wb') as f:
+            pickle.dump(dummy_scores_array, f)
     
     if create_batch_dict:
-        # Create a proper pickle file for batch_dict
-        # Create batch dict in regular (non-memory-efficient) mode
-        # Need to create proper torch tensors that match what MagicAnalyzer expects
-        batch_size = 1000  # Match config.MODEL_TRAIN_BATCH_SIZE
+        batch_dict_for_pickle = {}
+        batch_data_save_dir = run_dir / "checkpoints_magic"
+        if simulate_memory_efficient_batch_dict:
+            batch_data_save_dir.mkdir(parents=True, exist_ok=True)
+
+        batch_size = project_config.MODEL_TRAIN_BATCH_SIZE
         
-        # Create a minimal test case with just 3 steps for faster testing
-        batch_dict = {}
         for step in [1, 2, 3]:  # Steps 1, 2, 3 for replay to work
-            batch_dict[step] = {
-                'ims': torch.randn(batch_size, 3, 32, 32),  # CIFAR-10 image dimensions
-                'labs': torch.randint(0, 10, (batch_size,)),  # CIFAR-10 has 10 classes
-                'idx': torch.arange(batch_size),  # Indices for the batch
+            # Full batch data content
+            current_batch_content = {
+                'ims': torch.randn(batch_size, 3, 32, 32),
+                'labs': torch.randint(0, 10, (batch_size,)),
+                'idx': torch.arange(batch_size),
                 'lr': 0.025,
-                'momentum_buffers': []  # Empty list for momentum buffers
+                'momentum_buffers': [] 
             }
+
+            if simulate_memory_efficient_batch_dict:
+                # Save the full content to a separate file
+                batch_file_path = batch_data_save_dir / f"batch_{step}.pkl"
+                torch.save(current_batch_content, batch_file_path)
+                # The pickle file only stores the step number for memory-efficient mode
+                batch_dict_for_pickle[step] = {'step': step}
+            else:
+                # Old behavior: store full content in the pickle
+                batch_dict_for_pickle[step] = current_batch_content
         
         with open(run_dir / "magic_batch_dict.pkl", 'wb') as f:
-            pickle.dump(batch_dict, f)
+            pickle.dump(batch_dict_for_pickle, f)
     
     if create_logs:
         logs_magic_dir = run_dir / "logs_magic"
@@ -156,7 +172,7 @@ def create_dummy_run_artifacts(
     
     return run_dir
 
-@integration_test
+@pytest.mark.integration
 def test_scenario1_default_new_magic_run():
     """Scenario 1: Default New MAGIC Run and basic cleanup."""
     # Run MAGIC analysis
@@ -195,7 +211,7 @@ def test_scenario1_default_new_magic_run():
     assert (current_run_dir / "logs_magic").exists()    # Preserved
     assert (current_run_dir / "magic_batch_dict.pkl").exists()  # Preserved
 
-@integration_test
+@pytest.mark.integration
 def test_scenario2_magic_with_specified_id():
     """Scenario 2: MAGIC with Specified Run ID."""
     custom_run_id = "my_custom_test_run_01"
@@ -218,7 +234,7 @@ def test_scenario2_magic_with_specified_id():
     assert (current_run_dir / "checkpoints_magic").exists()
     assert (current_run_dir / "scores_magic").exists()
 
-@integration_test
+@pytest.mark.integration
 def test_scenario3_magic_skip_train():
     """Scenario 3: MAGIC Skip Train with Existing Run."""
     existing_run_id = "existing_run_for_skip"
@@ -237,7 +253,8 @@ def test_scenario3_magic_skip_train():
         "--log_level", "DEBUG"
     ]
     result = run_main_script(args)
-    assert result.returncode == 0
+    if result.returncode != 0:
+        pytest.fail(f"main_runner.py exited with {result.returncode}.\\nStdout:\\n{result.stdout}\\nStderr:\\n{result.stderr}")
 
     current_run_dir = RUNS_BASE_DIR / existing_run_id
     assert current_run_dir.exists()
@@ -250,7 +267,7 @@ def test_scenario3_magic_skip_train():
     metadata = json.loads(run_metadata_path.read_text())
     assert metadata["status"] == "completed"
 
-@integration_test
+@pytest.mark.integration
 def test_scenario4_error_skip_train_without_run_id():
     """Scenario 4: Error - Skip Train without Run ID."""
     args = [
@@ -263,7 +280,7 @@ def test_scenario4_error_skip_train_without_run_id():
     assert "--skip_train requires --run_id" in result.stderr or \
            "--skip_train requires --run_id" in result.stdout
 
-@integration_test
+@pytest.mark.integration
 def test_scenario5_lds_with_existing_run():
     """Scenario 5: LDS with Existing Run Context."""
     lds_run_id = "lds_run_context_test"
@@ -277,7 +294,8 @@ def test_scenario5_lds_with_existing_run():
         "--log_level", "DEBUG"
     ]
     result_lds = run_main_script(args_lds)
-    assert result_lds.returncode == 0
+    if result_lds.returncode != 0:
+        pytest.fail(f"main_runner.py for LDS exited with {result_lds.returncode}.\\nStdout:\\n{result_lds.stdout}\\nStderr:\\n{result_lds.stderr}")
 
     current_run_dir = RUNS_BASE_DIR / lds_run_id
     # Assert LDS outputs are within the run directory
@@ -287,7 +305,7 @@ def test_scenario5_lds_with_existing_run():
     assert (current_run_dir / "plots_lds").exists()
     # Note: indices_lds.pkl is not created when using existing results
 
-@integration_test
+@pytest.mark.integration
 def test_scenario6_lds_with_explicit_scores_file():
     """Scenario 6: LDS with Explicit Scores File."""
     run_A_id = "run_A_for_scores"
@@ -306,14 +324,15 @@ def test_scenario6_lds_with_explicit_scores_file():
         "--log_level", "DEBUG"
     ]
     result_lds = run_main_script(args_lds)
-    assert result_lds.returncode == 0
+    if result_lds.returncode != 0:
+        pytest.fail(f"main_runner.py for LDS exited with {result_lds.returncode}.\\nStdout:\\n{result_lds.stdout}\\nStderr:\\n{result_lds.stderr}")
 
     run_B_dir = RUNS_BASE_DIR / run_B_id
     # Assert LDS outputs are in run_B_dir
     assert (run_B_dir / "checkpoints_lds").exists()
     assert (run_B_dir / "losses_lds").exists()
 
-@integration_test
+@pytest.mark.integration
 def test_scenario7_clean_specific_run():
     """Scenario 7: Clean Checkpoints from Specific Run."""
     run_to_clean_id = "run_to_be_cleaned"
@@ -357,7 +376,7 @@ def test_scenario7_clean_specific_run():
     # Assert another_run_id is untouched
     assert another_run_cp_magic.exists()
 
-@integration_test
+@pytest.mark.integration
 def test_scenario8_list_and_info():
     """Scenario 8: List Runs and Show Run Info."""
     run1_id = "info_run_1"
@@ -389,7 +408,7 @@ def test_scenario8_list_and_info():
     assert result_show_nonexistent.returncode == 0
     assert "Run non_existent_run_id_123 not found" in result_show_nonexistent.stdout
 
-@integration_test
+@pytest.mark.integration
 def test_scenario9_error_lds_without_run_id():
     """Scenario 9: Error - LDS without Run ID."""
     args = ["--lds", "--log_level", "DEBUG"]
@@ -398,7 +417,7 @@ def test_scenario9_error_lds_without_run_id():
     assert "--lds requires --run_id" in result.stderr or \
            "--lds requires --run_id" in result.stdout
 
-@integration_test
+@pytest.mark.integration
 def test_scenario10_clean_all():
     """Scenario 10: Clean All (remove entire run)."""
     run_id = "run_to_delete_entirely"

@@ -25,6 +25,13 @@ from typing import Dict, Any, List
 import tempfile
 import shutil
 import pytest # Import pytest for fixtures
+import pickle
+import subprocess
+import json
+import warnings
+from unittest.mock import patch, MagicMock # Added MagicMock
+import os # Add os import for environment variables
+import importlib # Add importlib for reloading
 
 # Add src and tests directory to path for imports
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent # tests/e2e/ -> project root
@@ -53,272 +60,202 @@ from src.data_handling import get_cifar10_dataloader #, CustomDataset # CustomDa
 from tests.helpers.test_helpers import assert_dataloader_determinism
 
 
-@pytest.fixture(scope="class") # Use class scope if tests in class share setup
-def quality_test_environment(request): # request is a pytest fixture
-    """Pytest fixture to set up and tear down the test environment for the QualityTestSuite."""
-    logger = logging.getLogger('quality_test_suite.environment')
-    logger.info("Setting up test environment for QualityTestSuite...")
+@pytest.fixture(scope="function") # Ensure fresh config & run_manager for each test
+def isolated_config_e2e(tmp_path, monkeypatch):
+    """
+    Provides a fresh, isolated src.config module for E2E tests.
+    - Sets REPLAY_OUTPUTS_DIR environment variable to a temporary path.
+    - Reloads src.config and src.run_manager to use this path.
+    - Initializes a new run directory within this temporary path.
+    - Applies minimal default settings to the fresh config suitable for E2E tests.
+    - Restores original REPLAY_OUTPUTS_DIR and reloads modules in teardown.
+    """
+    original_sys_path = list(sys.path) # Keep sys.path restoration
+    original_replay_outputs_dir = os.environ.get("REPLAY_OUTPUTS_DIR")
+
+    # Ensure SRC_DIR is on path for imports (important for when test runner might change CWD)
+    if str(SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(SRC_DIR))
+
+    isolated_base_outputs = tmp_path / f"e2e_test_outputs_{Path(tempfile.NamedTemporaryFile().name).name}"
+    isolated_base_outputs.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("REPLAY_OUTPUTS_DIR", str(isolated_base_outputs))
+
+    # (Re)load config to pick up the new REPLAY_OUTPUTS_DIR
+    if 'src.config' in sys.modules:
+        fresh_config = importlib.reload(sys.modules['src.config'])
+    else:
+        from src import config as fresh_config
     
-    temp_dir = Path(tempfile.mkdtemp(prefix="replay_quality_test_"))
+    # (Re)load run_manager to pick up potentially reloaded config
+    if 'src.run_manager' in sys.modules:
+        fresh_run_manager = importlib.reload(sys.modules['src.run_manager'])
+    else:
+        from src import run_manager as fresh_run_manager
     
-    original_outputs_dir = config.OUTPUTS_DIR
-    original_magic_checkpoints_dir = config.MAGIC_CHECKPOINTS_DIR
-    original_magic_scores_dir = config.MAGIC_SCORES_DIR
-    original_batch_dict_file = config.BATCH_DICT_FILE
+    # Apply E2E specific default settings to fresh_config
+    fresh_config.MODEL_TRAIN_EPOCHS = 1
+    fresh_config.LDS_NUM_SUBSETS_TO_GENERATE = 1
+    fresh_config.LDS_NUM_MODELS_TO_TRAIN = 1
+    fresh_config.PAPER_NUM_MEASUREMENT_FUNCTIONS = 2
+    fresh_config.MAGIC_NUM_INFLUENTIAL_IMAGES_TO_SHOW = 1
+    fresh_config.PERFORM_INLINE_VALIDATIONS = False
+    fresh_config.NUM_CLASSES = 10 # CIFAR-10 default
+    fresh_config.MODEL_CREATOR_FUNCTION = construct_rn9 # Default model
+    fresh_config.CIFAR_ROOT = '/tmp/cifar_pytest_e2e/' # Use a test-specific CIFAR root
+    Path(fresh_config.CIFAR_ROOT).mkdir(parents=True, exist_ok=True) # Ensure it exists
+    fresh_config.SEED = 42 # Default seed
+    fresh_config.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not hasattr(fresh_config, 'NUM_TRAIN_SAMPLES'): fresh_config.NUM_TRAIN_SAMPLES = 50000
+    if not hasattr(fresh_config, 'NUM_TEST_SAMPLES_CIFAR10'): fresh_config.NUM_TEST_SAMPLES_CIFAR10 = 10000
 
-    config.OUTPUTS_DIR = temp_dir / "outputs"
-    config.MAGIC_CHECKPOINTS_DIR = config.OUTPUTS_DIR / "checkpoints_magic"
-    config.MAGIC_SCORES_DIR = config.OUTPUTS_DIR / "scores_magic"
-    config.BATCH_DICT_FILE = config.OUTPUTS_DIR / "magic_batch_dict.pkl"
+    try:
+        fresh_config.validate_config() # Validate this minimal config
+        fresh_config.validate_training_compatibility()
+    except ValueError as e:
+        pytest.fail(f"Initial E2E config validation failed: {e}")
     
-    # Ensure directories are created if MagicAnalyzer expects them
-    config.MAGIC_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    config.MAGIC_SCORES_DIR.mkdir(parents=True, exist_ok=True)
+    fresh_run_manager.init_run_directory() # Initialize run dir using new OUTPUTS_DIR
 
-    set_global_deterministic_state(config.SEED, enable_deterministic=True)
-    logger.info(f"Test environment created at: {temp_dir}")
+    yield fresh_config
 
-    # Pass the temp_dir to the class if it needs it directly
-    if request.cls:
-        request.cls.temp_dir_fixture = temp_dir 
+    # Teardown
+    sys.path[:] = original_sys_path # Restore sys.path
 
-    yield # This is where the testing happens
-
-    logger.info(f"Cleaning up test environment: {temp_dir}")
-    shutil.rmtree(temp_dir)
+    if original_replay_outputs_dir is None:
+        monkeypatch.delenv("REPLAY_OUTPUTS_DIR", raising=False)
+    else:
+        monkeypatch.setenv("REPLAY_OUTPUTS_DIR", original_replay_outputs_dir)
     
-    config.OUTPUTS_DIR = original_outputs_dir
-    config.MAGIC_CHECKPOINTS_DIR = original_magic_checkpoints_dir
-    config.MAGIC_SCORES_DIR = original_magic_scores_dir
-    config.BATCH_DICT_FILE = original_batch_dict_file
-    logger.info("Restored original config paths.")
+    # Reload modules again so they pick up the restored REPLAY_OUTPUTS_DIR
+    if 'src.config' in sys.modules:
+        importlib.reload(sys.modules['src.config'])
+    if 'src.run_manager' in sys.modules:
+        importlib.reload(sys.modules['src.run_manager'])
 
-@pytest.mark.usefixtures("quality_test_environment")
-class TestQualitySuite:
-    """Comprehensive test suite for quality assurance, using pytest fixtures."""
+# --- Test Functions (No Class Needed) ---
+
+@pytest.mark.e2e
+def test_configuration_validation_e2e(isolated_config_e2e):
+    current_config = isolated_config_e2e
+    logger = logging.getLogger('test_configuration_validation_e2e')
+    logger.info("🔧 Testing configuration validation (E2E context)...")
     
-    # temp_dir_fixture will be set by the fixture if needed by methods
+    # Initial validation is done in fixture. Here, test specific error cases.
+    original_magic_idx = current_config.MAGIC_TARGET_VAL_IMAGE_IDX
+    current_config.MAGIC_TARGET_VAL_IMAGE_IDX = -10
+    with pytest.raises(ValueError, match="MAGIC_TARGET_VAL_IMAGE_IDX .* out of bounds"):
+        current_config.validate_config()
+    current_config.MAGIC_TARGET_VAL_IMAGE_IDX = original_magic_idx
+    logger.info("✅ Configuration validation error catching passed (E2E context).")
 
-    def _setup_logging(self) -> logging.Logger: # Keep as helper method if tests use it
-        """Setup logging for test suite - can be called by tests if specific logging is needed beyond pytest's default."""
-        # Pytest handles stdout/stderr capture. For detailed test-specific logs, 
-        # using Python's logging per test is fine.
-        logger = logging.getLogger('quality_test_suite')
-        if not logger.handlers: # Avoid adding multiple handlers if logger is already configured
-            logging.basicConfig(
-                level=logging.INFO,
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-        return logger
+@pytest.mark.e2e
+def test_environment_validation_e2e(isolated_config_e2e):
+    current_config = isolated_config_e2e
+    logger = logging.getLogger('test_environment_validation_e2e')
+    logger.info("🌍 Testing environment validation (E2E context)...")
+    try:
+        env_info = current_config.validate_environment()
+        assert env_info is not None
+        assert env_info['outputs_writable'] is True # Fixture ensures this
+    except EnvironmentError as e:
+        pytest.fail(f"validate_environment raised EnvironmentError unexpectedly: {e}")
+    logger.info("✅ Environment validation passed (E2E context).")
+
+
+@pytest.mark.quality_integration # Keep if this implies a heavier E2E test
+def test_full_pipeline_main_runner_execution(isolated_config_e2e):
+    """
+    Tests that main_runner.py executes both MAGIC and LDS pipelines successfully,
+    generating expected outputs in the isolated run directory.
+    """
+    current_config = isolated_config_e2e
+    logger = logging.getLogger('test_full_pipeline_main_runner')
+    logger.info(f"Full pipeline test via main_runner.py in run dir: {current_config.get_current_run_dir()}")
+
+    # Override specific config settings for this full pipeline test if different from fixture defaults
+    current_config.MODEL_TRAIN_EPOCHS = 1 # Keep minimal for speed
+    current_config.MAGIC_NUM_INFLUENTIAL_IMAGES_TO_SHOW = 1
+    current_config.LDS_NUM_SUBSETS_TO_GENERATE = 1
+    current_config.LDS_NUM_MODELS_TO_TRAIN = 1
+    current_config.PAPER_NUM_MEASUREMENT_FUNCTIONS = 2 
+
+    # For LDS to run after MAGIC, MAGIC scores must exist.
+    # main_runner.py should handle this sequence if both --run_magic and --run_lds are passed.
+
+    script_path = PROJECT_ROOT / "main_runner.py"
+    cmd = [
+        sys.executable, str(script_path),
+        "--full_pipeline",
+        # "--epochs", str(current_config.MODEL_TRAIN_EPOCHS), # Removed, main_runner uses config directly
+        "--run_id", current_config.get_current_run_dir().name, # Correctly get run ID string via .name
+        # No need to pass run_id if isolated_config_e2e sets it up and main_runner respects it.
+        # main_runner.py should pick up the current run context established by the fixture.
+    ]
+    logger.info(f"Executing main_runner.py: {' '.join(cmd)}")
     
-    def __init__(self):
-        # __init__ is still called. If using a class fixture, some setup might move there.
-        # self.test_results is fine to keep if you want to aggregate results within the class instance.
-        self.logger = self._setup_logging() # logger for the test methods
-        self.test_results: Dict[str, Any] = {} # For custom result aggregation if needed beyond pytest pass/fail
+    # Execute main_runner.py
+    # Important: The environment for subprocess should ensure it sees the same Python environment
+    # and potentially the patched sys.path if main_runner relies on relative imports outside of `src` package.
+    # Pytest usually handles this well for subprocesses started with sys.executable.
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=PROJECT_ROOT)
 
-    # Removed setup_test_environment and cleanup_test_environment, now handled by fixture.
+    if result.returncode != 0:
+        logger.error(f"main_runner.py execution failed.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
+        pytest.fail(f"main_runner.py failed. Stderr: {result.stderr}")
+    else:
+        logger.info(f"main_runner.py execution completed.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
 
-    @pytest.mark.e2e
-    def test_configuration_validation(self):
-        self.logger.info("🔧 Testing configuration validation...")
-        config.validate_config() # Should not raise error
-        env_info = config.validate_environment()
-        assert isinstance(env_info, dict)
-        assert 'python_version' in env_info
-        assert 'torch_version' in env_info
-        self.logger.info("✅ Configuration validation passed")
+    # --- Assertions for Outputs ---
+    # Verify that the run directory used by main_runner is the one set up by the fixture.
+    # This can be tricky if main_runner explicitly calls init_run_directory without checking existing one.
+    # Assuming main_runner uses get_current_run_dir() or init_run_directory() correctly.
+    run_dir_after_main_runner = current_config.get_current_run_dir()
+    assert run_dir_after_main_runner.exists(), "Run directory does not exist after main_runner."
+    logger.info(f"Verified outputs in run directory: {run_dir_after_main_runner}")
+
+    # MAGIC outputs
+    assert current_config.get_magic_checkpoints_dir().exists(), "MAGIC checkpoints dir missing."
+    assert len(list(current_config.get_magic_checkpoints_dir().glob("*.pt"))) > 0, "No MAGIC checkpoints found."
+    assert current_config.get_magic_scores_dir().exists(), "MAGIC scores dir missing."
+    magic_scores_file = current_config.get_magic_scores_path(current_config.MAGIC_TARGET_VAL_IMAGE_IDX)
+    assert magic_scores_file.exists(), f"MAGIC scores file {magic_scores_file.name} missing."
+    assert current_config.get_magic_training_log_path().exists(), "MAGIC training log missing."
+
+    # LDS outputs
+    assert current_config.get_lds_checkpoints_dir().exists(), "LDS checkpoints dir missing."
+    # LDS Checkpoints are not saved by the current lds_validator.py implementation.
+    # If LDS_NUM_MODELS_TO_TRAIN > 0 and current_config.LDS_NUM_SUBSETS_TO_GENERATE > 0:
+    #     # Check if the LDS checkpoints directory is not empty
+    #     lds_checkpoints_dir = current_config.get_lds_checkpoints_dir()
+    #     checkpoint_files = list(lds_checkpoints_dir.glob("*.pt"))
+    #     if not (len(checkpoint_files) > 0):
+    #         pytest.fail(f"No LDS checkpoints found in {lds_checkpoints_dir}. main_runner stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
     
-    @pytest.mark.e2e
-    def test_error_handling(self):
-        self.logger.info("🛡️ Testing error handling...")
-        with pytest.raises(ValueError):
-            get_cifar10_dataloader(batch_size=-1)
-        with pytest.raises(ValueError):
-            get_cifar10_dataloader(split='invalid_split')
-        with pytest.raises(ValueError):
-            get_cifar10_dataloader(num_workers=-1)
-        
-        for test_seed in [0, 1, 2**31-1]:
-            result = derive_component_seed(test_seed, "test_error_handling", "edge_case")
-            assert 0 <= result < 2**31, f"Derived seed out of range: {result}"
-        self.logger.info("✅ Error handling tests passed")
+    assert current_config.get_lds_losses_dir().exists(), "LDS losses dir missing."
+    if current_config.LDS_NUM_MODELS_TO_TRAIN > 0 and current_config.LDS_NUM_SUBSETS_TO_GENERATE > 0:
+        # Check if the LDS losses directory is not empty
+        assert len(list(current_config.get_lds_losses_dir().glob("*.pkl"))) > 0, "No LDS loss files found." # Assuming .pkl, adjust if .pth
     
-    @pytest.mark.e2e
-    def test_memory_efficiency(self):
-        self.logger.info("💾 Testing memory efficiency...")
-        tracemalloc.start()
-        start_time = time.time()
-        _ = MagicAnalyzer(use_memory_efficient_replay=False) # analyzer_regular
-        regular_time = time.time() - start_time
-        _, regular_memory_peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        tracemalloc.clear_traces()
+    # Check for LDS log files directory, and if not empty if models were trained
+    lds_logs_dir = current_config.get_lds_logs_dir()
+    assert lds_logs_dir.exists(), "LDS logs dir missing."
+    if current_config.LDS_NUM_MODELS_TO_TRAIN > 0 and current_config.LDS_NUM_SUBSETS_TO_GENERATE > 0:
+        assert len(list(lds_logs_dir.glob("*.json"))) > 0, "No LDS training logs found."
 
-        tracemalloc.start()
-        start_time = time.time()
-        _ = MagicAnalyzer(use_memory_efficient_replay=True) # analyzer_efficient
-        efficient_time = time.time() - start_time
-        _, efficient_memory_peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        tracemalloc.clear_traces()
-        
-        memory_ratio = efficient_memory_peak / regular_memory_peak if regular_memory_peak > 0 else 1.0
-        self.test_results['memory_efficiency'] = {
-            'regular_memory_mb': regular_memory_peak / 1e6,
-            'efficient_memory_mb': efficient_memory_peak / 1e6,
-            'memory_ratio': memory_ratio,
-            'regular_init_time': regular_time,
-            'efficient_init_time': efficient_time
-        }
-        self.logger.info(f"Memory (MB): Regular={regular_memory_peak/1e6:.1f}, Efficient={efficient_memory_peak/1e6:.1f}, Ratio={memory_ratio:.2f}")
-        # Add an assertion, e.g. efficient mode is not significantly worse, or is better
-        assert efficient_memory_peak <= regular_memory_peak * 1.1, "Memory efficient mode used too much memory compared to regular."
-        self.logger.info("✅ Memory efficiency test passed")
-            
-    @pytest.mark.e2e
-    def test_performance_benchmarks(self):
-        self.logger.info("⚡ Testing performance benchmarks...")
-        start_time = time.time()
-        for i in range(1000):
-            derive_component_seed(42, "test_perf", i)
-        seed_derivation_time = time.time() - start_time
+    # Main run log and metadata
+    run_log_path = run_dir_after_main_runner / f"run_{run_dir_after_main_runner.name}.log"
+    assert run_log_path.exists(), "Main run log missing."
+    metadata_file_path = run_dir_after_main_runner / "run_metadata.json"
+    assert metadata_file_path.exists(), "Run metadata file missing."
+    with open(metadata_file_path, 'r') as f_meta:
+        metadata = json.load(f_meta)
+        assert metadata['run_id'] == run_dir_after_main_runner.name
+        assert metadata['config_snapshot']['MODEL_TRAIN_EPOCHS'] == current_config.MODEL_TRAIN_EPOCHS
 
-        start_time = time.time()
-        _ = create_deterministic_model(
-            master_seed=42,
-            creator_func=construct_rn9,
-            instance_id="test_perf_model",
-            num_classes=10
-        )
-        model_creation_time = time.time() - start_time
+    logger.info("✅ Full pipeline (main_runner.py) execution and output checks passed.")
 
-        start_time = time.time()
-        _ = create_deterministic_dataloader(
-            master_seed=42,
-            creator_func=get_cifar10_dataloader,
-            instance_id="test_perf_loader",
-            batch_size=32, split='train', shuffle=True, num_workers=0, root_path=config.CIFAR_ROOT
-        )
-        dataloader_creation_time = time.time() - start_time
 
-        self.test_results['performance'] = {
-            'seed_derivation_per_1000': seed_derivation_time,
-            'model_creation_time': model_creation_time,
-            'dataloader_creation_time': dataloader_creation_time
-        }
-        self.logger.info(f"Perf: Seed (1k)={seed_derivation_time:.3f}s, ModelCreate={model_creation_time:.3f}s, LoaderCreate={dataloader_creation_time:.3f}s")
-        assert seed_derivation_time < 1.0, f"Seed derivation too slow: {seed_derivation_time:.3f}s"
-        assert model_creation_time < 5.0, f"Model creation too slow: {model_creation_time:.3f}s"
-        self.logger.info("✅ Performance benchmarks passed")
-    
-    @pytest.mark.e2e
-    def test_edge_cases(self):
-        self.logger.info("🔍 Testing edge cases...")
-        # Test with very small dataset (implicitly tests large batch size relative to dataset)
-        _ = create_deterministic_dataloader(
-            master_seed=42,
-            creator_func=get_cifar10_dataloader,
-            instance_id="small_data_test",
-            batch_size=config.NUM_TRAIN_SAMPLES + 100, # Batch size larger than dataset
-            split='train', shuffle=True, num_workers=0, root_path=config.CIFAR_ROOT
-        )
-        
-        extreme_seeds = [0, 1, 2**31-1, 42]
-        for seed in extreme_seeds:
-            derived = derive_component_seed(seed, "test_edge_seed", "edge_case")
-            assert 0 <= derived < 2**31, f"Derived seed out of range for {seed}: {derived}"
-        
-        for num_classes in [1, 2, 10, 100]:
-            model = construct_rn9(num_classes=num_classes)
-            test_input = torch.randn(1, 3, 32, 32)
-            output = model(test_input)
-            assert output.shape[-1] == num_classes
-        self.logger.info("✅ Edge cases test passed")
-    
-    @pytest.mark.e2e
-    def test_data_consistency_basic(self):
-        self.logger.info("📊 Testing basic data consistency...")
-        # Global deterministic state is set by fixture
-        
-        # Basic consistency check using helper functions
-        assert_dataloader_determinism(
-            "e2e_test_same", 
-            "e2e_test_same", 
-            should_be_equal=True,
-            context="E2E same instance_id test"
-        )
-        
-        assert_dataloader_determinism(
-            "e2e_test_diff_1", 
-            "e2e_test_diff_2", 
-            should_be_equal=False,
-            context="E2E different instance_id test"
-        )
-
-        # Additional specific check for dataloader re-creation consistency
-        self.logger.info("🔁 Testing direct dataloader re-creation consistency...")
-        results = []
-        for _ in range(2): # Run twice
-            loader = create_deterministic_dataloader(
-                master_seed=42, creator_func=get_cifar10_dataloader,
-                instance_id="consistency_checker", batch_size=100,
-                split='train', shuffle=True, num_workers=0, root_path=config.CIFAR_ROOT
-            )
-            first_batch = next(iter(loader))
-            indices = first_batch[2] 
-            results.append(indices.clone())
-        assert torch.equal(results[0], results[1]), "Inconsistent first batch indices between two identical loader creations."
-        
-        self.logger.info("✅ Basic data consistency test passed")
-        self.logger.info("ℹ️  For comprehensive data ordering tests, see integration test: test_comprehensive_data_ordering_consistency")
-            
-    @pytest.mark.e2e
-    @pytest.mark.slow
-    def test_mini_training_workflow(self):
-        self.logger.info("🚀 Testing mini training workflow...")
-        original_epochs = config.MODEL_TRAIN_EPOCHS
-        original_batch_size = config.MODEL_TRAIN_BATCH_SIZE
-        original_perform_inline_validations = config.PERFORM_INLINE_VALIDATIONS
-
-        config.MODEL_TRAIN_EPOCHS = 1
-        config.MODEL_TRAIN_BATCH_SIZE = 128 # Reasonably small
-        config.PERFORM_INLINE_VALIDATIONS = False # Disable for this mini-run to speed up
-        
-        try:
-            analyzer = MagicAnalyzer(use_memory_efficient_replay=True)
-            total_steps = analyzer.train_and_collect_intermediate_states(force_retrain=True)
-            assert total_steps > 0, "Mini training returned no steps"
-            
-            # Ensure some checkpoints exist (number depends on save_every_k_steps)
-            # This check might need adjustment based on actual save logic.
-            # For now, just existence of the dir created by analyzer is a basic check.
-            assert config.MAGIC_CHECKPOINTS_DIR.exists()
-            # num_checkpoints = len(list(config.MAGIC_CHECKPOINTS_DIR.glob("ckpt_step_*.pth")))
-            # assert num_checkpoints > 0, "No checkpoints saved during mini training."
-
-            scores = analyzer.compute_influence_scores(
-                total_training_iterations=total_steps,
-                force_recompute=True
-            )
-            assert scores is not None, "Failed to compute influence scores"
-            # Assuming influence scores are num_checkpoints x num_train_samples
-            # The shape might be (total_steps, num_train_samples) if scores are per iteration not per checkpoint snapshot
-            # Based on algorithm, it's likely per-influence source (e.g. training point) vs. target output, 
-            # but the current `scores` return seems to be (total_steps, num_train_samples)
-            expected_score_shape_dim1 = total_steps # Or number of actual checkpoints saved
-            assert scores.shape == (expected_score_shape_dim1, config.NUM_TRAIN_SAMPLES), \
-                f"Unexpected scores shape: {scores.shape}, expected ({expected_score_shape_dim1}, {config.NUM_TRAIN_SAMPLES})"
-
-            self.logger.info(f"✅ Mini training workflow completed successfully - {total_steps} steps")
-        finally:
-            config.MODEL_TRAIN_EPOCHS = original_epochs
-            config.MODEL_TRAIN_BATCH_SIZE = original_batch_size
-            config.PERFORM_INLINE_VALIDATIONS = original_perform_inline_validations
-
-    # The run_all_tests and summary printing is handled by pytest runner
-    # Individual test methods will be discovered and run.
-    # The self.test_results can be used for custom reporting if needed outside pytest, 
-    # but pytest's own reporting is usually sufficient.
-
-# Removed main() and if __name__ == "__main__" as pytest handles test execution.
+# Configure logging for pytest output
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

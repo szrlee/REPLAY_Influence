@@ -44,7 +44,10 @@ get_magic_scores_file_for_lds_input = run_manager.get_magic_scores_file_for_lds_
 
 # --- Project Structure --- (Keep constants like PROJECT_ROOT and OUTPUTS_DIR here)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+# OUTPUTS_DIR = PROJECT_ROOT / "outputs" # Old definition
+OUTPUTS_DIR_DEFAULT = PROJECT_ROOT / "outputs"
+OUTPUTS_DIR = Path(os.getenv('REPLAY_OUTPUTS_DIR', OUTPUTS_DIR_DEFAULT))
+
 # DATA_DIR = PROJECT_ROOT / "data" # Uncomment if you have a persistent local data folder
 
 # --- General Settings --- (Keep these core settings)
@@ -98,7 +101,7 @@ PAPER_MEASUREMENT_TARGET_INDICES = list(range(PAPER_NUM_MEASUREMENT_FUNCTIONS)) 
 # Updated to match ResNet-9 on CIFAR-10 specifications from [Jor24a]
 # and user-provided large-batch SGD recipe.
 MODEL_TRAIN_LR = 1e-3  # Peak LR for OneCycleLR.
-MODEL_TRAIN_EPOCHS = 2 # Reduced for faster integration testing
+MODEL_TRAIN_EPOCHS = 1 # Reduced for faster integration testing
 WARMUP_EPOCHS = 0       # OneCycleLR handles its own warmup via pct_start. Set to 0.
 MODEL_TRAIN_BATCH_SIZE = 256
 MODEL_TRAIN_MOMENTUM = 0
@@ -175,8 +178,8 @@ LDS_INDICES_FILE = "indices_lds.pkl" # Name of the file storing LDS subset indic
 
 # Parameters for LDS subset generation
 LDS_SUBSET_FRACTION = 0.99
-LDS_NUM_SUBSETS_TO_GENERATE = 16 # Reduced to save disk space and time
-LDS_NUM_MODELS_TO_TRAIN = 16    # Reduced to save disk space and time
+LDS_NUM_SUBSETS_TO_GENERATE = 1 # Reduced to save disk space and time
+LDS_NUM_MODELS_TO_TRAIN = 1    # Reduced to save disk space and time
 
 # LDS training uses the same hyperparameters as MAGIC (config.MODEL_TRAIN_*) 
 

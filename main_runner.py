@@ -135,6 +135,28 @@ def setup_output_directories() -> None:
     logger.debug("All output directories created successfully")
 
 
+def add_file_handler_to_logger(logger_instance: logging.Logger, run_dir: Path, run_id: str):
+    """Adds a file handler to the given logger for the main run log."""
+    log_file_path = run_dir / f"run_{run_id}.log"
+    file_handler = logging.FileHandler(log_file_path)
+    
+    formatter = None
+    if logger_instance.handlers:
+        for handler in logger_instance.handlers:
+            if handler.formatter:
+                formatter = handler.formatter
+                break
+    if formatter is None: 
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logger_instance.level) 
+    logger_instance.addHandler(file_handler)
+    logger_instance.info(f"Main run log being saved to: {log_file_path}")
+
+
 def run_magic_analysis(run_id: Optional[str], skip_train: bool, force: bool) -> Optional[str]:
     """
     Run MAGIC influence analysis.
@@ -148,48 +170,19 @@ def run_magic_analysis(run_id: Optional[str], skip_train: bool, force: bool) -> 
         The run_id (name of the run directory) if successful, None otherwise.
     """
     logger = logging.getLogger('influence_analysis.main')
-    
-    actual_run_dir: Optional[Path] = None # To store the path of the run directory
+    main_process_logger = logging.getLogger('influence_analysis')
+    actual_run_dir: Optional[Path] = None
     
     try:
-        # Initialize or use existing run directory
-        if run_id:
-            if skip_train:
-                # For skip_train, use existing run directory
-                actual_run_dir = config.init_run_directory(run_id=run_id, use_existing=True)
-                logger.info(f"Using existing run directory: {actual_run_dir}")
-            else:
-                # For new training with custom run_id, create new directory with that ID
-                actual_run_dir = config.init_run_directory(run_id=run_id, use_existing=False)
-                logger.info(f"Created new run directory with custom ID: {actual_run_dir}")
-                config.save_run_metadata({
-                    "status": "started",
-                    "action": "magic",
-                    "run_id": actual_run_dir.name, # Save the actual run_id
-                    "timestamp": datetime.datetime.now().isoformat()
-                })
-        else:
-            if skip_train:
-                logger.error("--skip_train requires --run_id to specify which run to use")
-                return None # Changed from 1
-            actual_run_dir = config.init_run_directory() # This will set CURRENT_RUN_DIR and return it
-            logger.info(f"Created new run directory: {actual_run_dir}")
-            config.save_run_metadata({
-                "status": "started",
-                "action": "magic",
-                "run_id": actual_run_dir.name, # Save the actual run_id
-                "timestamp": datetime.datetime.now().isoformat()
-            })
-        
-        if actual_run_dir is None: # Should not happen if init_run_directory worked
-            logger.error("Failed to initialize or get run directory for MAGIC.")
+        use_existing_run = (run_id is not None) and not force and not skip_train
+        if skip_train and not run_id:
+            logger.error("--skip_train requires --run_id to identify existing run.")
             return None
 
-        # Now create the run-specific subdirectories (ensures config.CURRENT_RUN_DIR is set)
-        setup_output_directories()
+        actual_run_dir = config.init_run_directory(run_id=run_id, use_existing=use_existing_run)
+        add_file_handler_to_logger(main_process_logger, actual_run_dir, actual_run_dir.name)
         
-        # Run MAGIC analysis
-        logger.info("--- Running MAGIC Influence Analysis ---")
+        logger.info(f"Starting MAGIC analysis in run directory: {actual_run_dir}")
         analyzer = MagicAnalyzer(use_memory_efficient_replay=True)
         
         if skip_train:
@@ -231,7 +224,8 @@ def run_magic_analysis(run_id: Optional[str], skip_train: bool, force: bool) -> 
         })
         
         logger.info("--- MAGIC Analysis Completed ---")
-        return actual_run_dir.name # Return the run_id string
+
+        return actual_run_dir.name if actual_run_dir else None
         
     except Exception as e:
         logger.error(f"MAGIC analysis failed: {e}")
@@ -259,68 +253,68 @@ def run_lds_validation(run_id: str, scores_file: Optional[str], force: bool) -> 
         Exit code (0 for success, 1 for error)
     """
     logger = logging.getLogger('influence_analysis.main')
-    
+    main_process_logger = logging.getLogger('influence_analysis')
+    actual_run_dir: Optional[Path] = None 
+
     try:
-        # Use existing run directory or create new one if needed
         if scores_file:
-            # When using external scores file, we might need to create a new run
             try:
-                run_dir = config.init_run_directory(run_id=run_id, use_existing=True)
-                logger.info(f"Using existing run directory: {run_dir}")
+                actual_run_dir = config.init_run_directory(run_id=run_id, use_existing=True)
+                logger.info(f"Using existing run directory for LDS outputs: {actual_run_dir}")
             except ValueError:
-                # Run doesn't exist, create it
-                run_dir = config.init_run_directory(run_id=run_id, use_existing=False)
-                logger.info(f"Created new run directory for LDS: {run_dir}")
+                actual_run_dir = config.init_run_directory(run_id=run_id, use_existing=False)
+                logger.info(f"Created new run directory for LDS outputs: {actual_run_dir}")
                 config.save_run_metadata({
-                    "status": "started",
-                    "action": "lds",
+                    "status": "started", 
+                    "action": f"lds_with_external_scores_{Path(scores_file).name}",
                     "timestamp": datetime.datetime.now().isoformat()
                 })
         else:
-            # When using scores from the run, it must exist
-            run_dir = config.init_run_directory(run_id=run_id, use_existing=True)
-            logger.info(f"Using run directory: {run_dir}")
-        
-        # Now create the run-specific subdirectories
+            actual_run_dir = config.init_run_directory(run_id=run_id, use_existing=True)
+            logger.info(f"Using run directory for LDS: {actual_run_dir}")
+
+        add_file_handler_to_logger(main_process_logger, actual_run_dir, actual_run_dir.name)
+
         setup_output_directories()
         
-        # Determine scores file
+        # Determine scores file path for LDS
+        effective_scores_path: Path
         if scores_file:
-            scores_path = Path(scores_file)
-            if not scores_path.exists():
-                logger.error(f"Scores file not found: {scores_path}")
+            effective_scores_path = Path(scores_file)
+            if not effective_scores_path.exists():
+                logger.error(f"External scores file not found: {effective_scores_path}")
                 return 1
         else:
-            # Use scores from the run
-            scores_path = run_dir / "scores_magic" / f"magic_scores_val_{config.MAGIC_TARGET_VAL_IMAGE_IDX}.pkl"
-            if not scores_path.exists():
-                logger.error(f"No MAGIC scores found in run {run_id}")
-                logger.error(f"Expected at: {scores_path}")
+            # Use scores from the current run_id (actual_run_dir)
+            effective_scores_path = actual_run_dir / "scores_magic" / f"magic_scores_val_{config.MAGIC_TARGET_VAL_IMAGE_IDX}.pkl"
+            if not effective_scores_path.exists():
+                logger.error(f"No MAGIC scores found in run {run_id} for LDS validation.")
+                logger.error(f"Expected at: {effective_scores_path}")
                 return 1
         
-        logger.info(f"Using MAGIC scores from: {scores_path}")
+        logger.info(f"Using MAGIC scores from: {effective_scores_path} for LDS validation")
         
-        # Run LDS validation
-        logger.info("--- Running LDS Validation ---")
+        # Run the actual LDS validation from lds_validator.py
+        logger.info("--- Calling execute_lds_validation --- ")
         
-        # Check if we should use existing results
-        # Ensure both losses directory and indices file exist to truly use existing results
-        # Explicitly cast to Path to ensure .exists() can be called.
-        indices_file_path = Path(config.get_lds_indices_file())
-        losses_dir_path = Path(config.get_lds_losses_dir())
+        # Determine if existing results should be used for LDS
+        # (e.g., pre-trained models, pre-computed losses)
+        indices_file_path = config.get_lds_indices_file() # Uses current run context set by init_run_directory
+        losses_dir_path = config.get_lds_losses_dir()   # Uses current run context
         
-        use_existing = not force and losses_dir_path.exists() and indices_file_path.exists()
-        
+        use_existing_lds_results = not force and losses_dir_path.exists() and indices_file_path.exists()
+        if use_existing_lds_results:
+            logger.info("LDS: Found existing losses and indices. Will attempt to use existing results if not forced.")
+
         execute_lds_validation(
-            precomputed_magic_scores_path=scores_path,
-            use_existing_results=use_existing,
-            force_replot_correlation=False,
-            force_regenerate_indices=force
+            precomputed_magic_scores_path=effective_scores_path,
+            use_existing_results=use_existing_lds_results,
+            force_replot_correlation=False, # This main_runner flag is not about forcing replot, but forcing re-run
+            force_regenerate_indices=force # if force is True, indices will be regenerated by lds_validator
         )
         
-        logger.info("--- LDS Validation Completed ---")
+        logger.info("--- LDS Validation Completed --- ")
         return 0
-        
     except Exception as e:
         logger.error(f"LDS validation failed: {e}")
         logger.debug(traceback.format_exc())
@@ -401,8 +395,8 @@ Examples:
     
     # Setup logging first
     try:
-        logger = setup_logging(log_level=args.log_level)
-        logger.info("=== REPLAY Influence Analysis System ===")
+        initial_logger = setup_logging(log_level=args.log_level)
+        initial_logger.info("=== REPLAY Influence Analysis System ===")
     except Exception as e:
         print(f"Failed to setup logging: {e}", file=sys.stderr)
         return 1
@@ -430,7 +424,7 @@ Examples:
         
         if args.info:
             if not args.run_id:
-                logger.error("--info requires --run_id")
+                initial_logger.error("--info requires --run_id")
                 return 1
             
             runs = config.list_runs()
@@ -455,11 +449,11 @@ Examples:
         
         # Validate configuration
         config.validate_config()
-        logger.info("Configuration validation passed")
+        initial_logger.info("Configuration validation passed")
         
         # Set global deterministic state
         set_global_deterministic_state(config.SEED, enable_deterministic=True)
-        logger.info(f"Set global deterministic state with seed {config.SEED}")
+        initial_logger.info(f"Set global deterministic state with seed {config.SEED}")
         
         # Suppress warnings
         warnings.filterwarnings('ignore', category=UserWarning)
@@ -471,63 +465,62 @@ Examples:
         
         elif args.lds:
             if not args.run_id:
-                logger.error("--lds requires --run_id")
+                initial_logger.error("--lds requires --run_id")
                 return 1
             # For standalone LDS, if scores_file is provided, it implies a specific context for LDS.
             # If not, LDS uses scores from the given run_id.
             return run_lds_validation(args.run_id, args.scores_file, args.force)
 
         elif args.full_pipeline:
-            logger.info("--- Starting Full Pipeline (MAGIC -> LDS) ---")
+            initial_logger.info("--- Starting Full Pipeline (MAGIC -> LDS) ---")
             
-            # Step 1: Run MAGIC
-            # If args.run_id is provided, MAGIC will use/create it.
-            # If args.skip_train is true, it must have a run_id.
-            # args.force applies to MAGIC.
             if args.skip_train and not args.run_id:
-                logger.error("--skip_train with --full_pipeline requires --run_id.")
+                initial_logger.error("--skip_train with --full_pipeline requires --run_id.")
                 return 1
             if args.scores_file:
-                logger.warning("--scores_file is ignored when using --full_pipeline, as MAGIC results from the pipeline are used.")
+                initial_logger.warning("--scores_file is ignored when using --full_pipeline, as MAGIC results from the pipeline are used.")
 
             magic_run_id = run_magic_analysis(run_id=args.run_id, skip_train=args.skip_train, force=args.force)
             
             if magic_run_id is None:
-                logger.error("MAGIC analysis failed as part of the full pipeline. LDS validation will not run.")
+                initial_logger.error("MAGIC analysis failed as part of the full pipeline. LDS validation will not run.")
                 return 1
             
-            logger.info(f"MAGIC analysis completed successfully. Run ID: {magic_run_id}")
-            logger.info("Proceeding to LDS validation...")
+            # For full_pipeline, the main log is already established by run_magic_analysis.
+            # We don't add another one here unless LDS runs in a *different* main directory,
+            # which is not the current E2E test case (it uses the same run_id from fixture).
+            initial_logger.info(f"MAGIC analysis completed successfully. Run ID: {magic_run_id}")
+            initial_logger.info("Proceeding to LDS validation...")
             
-            # Step 2: Run LDS
-            # Use the run_id from the MAGIC step.
-            # args.force applies to LDS.
-            # scores_file is implicitly the one generated by the MAGIC step within magic_run_id.
+            # run_lds_validation will use the run_id from MAGIC.
+            # If it were to log to a *different* main file, its internal add_file_handler_to_logger would handle it.
+            # For this full_pipeline, both MAGIC and LDS parts will log to the main log file
+            # established by run_magic_analysis (or if run_lds_validation re-adds it, it should be idempotent or log to same file).
             lds_exit_code = run_lds_validation(run_id=magic_run_id, scores_file=None, force=args.force)
             
             if lds_exit_code == 0:
-                logger.info("--- Full Pipeline (MAGIC -> LDS) Completed Successfully ---")
+                initial_logger.info("--- Full Pipeline (MAGIC -> LDS) Completed Successfully ---")
             else:
-                logger.error("--- Full Pipeline (MAGIC -> LDS) Failed during LDS validation ---")
+                initial_logger.error("--- Full Pipeline (MAGIC -> LDS) Failed during LDS validation ---")
             return lds_exit_code
         
         elif args.clean:
             if not args.run_id:
-                logger.error("--clean requires --run_id")
+                initial_logger.error("--clean requires --run_id")
                 return 1
             clean_checkpoints(args.run_id, args.what)
             return 0
         
         # Should not reach here due to required=True on action group
-        logger.error("No action specified")
+        initial_logger.error("No action specified")
         return 1
         
     except KeyboardInterrupt:
-        logger.warning("Operation interrupted by user")
+        initial_logger.warning("Operation interrupted by user")
         return 1
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        logger.debug(traceback.format_exc())
+        initial_logger.error(f"Unexpected error: {e}")
+        initial_logger.debug(traceback.format_exc())
         return 1
 
 

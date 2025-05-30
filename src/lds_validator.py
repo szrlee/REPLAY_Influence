@@ -476,7 +476,8 @@ def compute_and_plot_lds_correlation(lds_validation_margins: np.ndarray,
                                      model_ids_used: List[int],
                                      precomputed_magic_scores_path: Optional[Union[str, Path]] = None,
                                      target_val_idx: Optional[int] = None,
-                                     plot_suffix: str = "") -> bool:
+                                     plot_suffix: str = "",
+                                     loaded_magic_influence_estimates: Optional[np.ndarray] = None) -> bool:
     """
     Core LDS correlation computation and plotting logic.
     
@@ -487,6 +488,7 @@ def compute_and_plot_lds_correlation(lds_validation_margins: np.ndarray,
         precomputed_magic_scores_path: Path to MAGIC influence scores file
         target_val_idx: Target validation image index
         plot_suffix: Suffix to add to plot filename (e.g., "_existing")
+        loaded_magic_influence_estimates: Optional pre-loaded magic scores to use directly.
         
     Returns:
         bool: True if correlation plot was successfully generated, False otherwise
@@ -501,31 +503,48 @@ def compute_and_plot_lds_correlation(lds_validation_margins: np.ndarray,
         return False
     
     # Ensure magic_scores_file_to_load is a Path object for .exists()
-    effective_magic_scores_path: Path
-    if precomputed_magic_scores_path is None:
-        effective_magic_scores_path = config.get_magic_scores_file_for_lds_input()
-    elif isinstance(precomputed_magic_scores_path, str):
-        effective_magic_scores_path = Path(precomputed_magic_scores_path)
-    else: # It's already a Path
-        effective_magic_scores_path = precomputed_magic_scores_path
-    
-    if not effective_magic_scores_path.exists():
-        logger.error(f"MAGIC scores file not found at {effective_magic_scores_path}")
+    effective_magic_scores_path: Optional[Path] = None
+    if precomputed_magic_scores_path:
+        if isinstance(precomputed_magic_scores_path, str):
+            effective_magic_scores_path = Path(precomputed_magic_scores_path)
+        else: # It's already a Path
+            effective_magic_scores_path = precomputed_magic_scores_path
+
+    magic_influence_estimates_to_use: np.ndarray
+    if loaded_magic_influence_estimates is not None:
+        logger.info("Using pre-loaded MAGIC influence estimates for correlation.")
+        magic_influence_estimates_to_use = loaded_magic_influence_estimates
+    elif effective_magic_scores_path and effective_magic_scores_path.exists():
+        logger.info(f"Loading MAGIC scores from {effective_magic_scores_path} for correlation...")
+        with open(effective_magic_scores_path, 'rb') as f:
+            loaded_data = pickle.load(f)
+        
+        if isinstance(loaded_data, dict) and 'scores' in loaded_data:
+            logger.info("Loaded MAGIC scores as a dictionary, extracting 'scores' key.")
+            raw_scores = loaded_data['scores']
+            if not isinstance(raw_scores, np.ndarray):
+                logger.info(f"Converting MAGIC scores from {type(raw_scores)} to np.ndarray.")
+                magic_influence_estimates_to_use = np.array(raw_scores)
+            else:
+                magic_influence_estimates_to_use = raw_scores
+        elif isinstance(loaded_data, np.ndarray):
+            magic_influence_estimates_to_use = loaded_data
+        else:
+            logger.error(f"Loaded MAGIC scores from {effective_magic_scores_path} have unexpected type or format: {type(loaded_data)}")
+            return False
+    else:
+        logger.error(f"MAGIC scores file not found at {effective_magic_scores_path} and no pre-loaded scores provided.")
         return False
     
-    logger.info(f"Loading MAGIC scores from {effective_magic_scores_path} for correlation...")
-    with open(effective_magic_scores_path, 'rb') as f:
-        loaded_scores = pickle.load(f)
-    
-    # Handle different MAGIC score formats
-    if loaded_scores.ndim == 2:  # Per-step scores [num_steps, num_train_samples]
-        magic_influence_estimates = loaded_scores.sum(axis=0)
-        logger.info(f"Summed per-step MAGIC scores (shape {loaded_scores.shape}) to flat scores (shape {magic_influence_estimates.shape}).")
-    elif loaded_scores.ndim == 1:  # Already flat scores [num_train_samples]
-        magic_influence_estimates = loaded_scores
-        logger.info(f"Loaded flat MAGIC scores (shape {magic_influence_estimates.shape}).")
+    # Handle different MAGIC score formats (if not already handled by pre-loading)
+    if magic_influence_estimates_to_use.ndim == 2:  # Per-step scores [num_steps, num_train_samples]
+        magic_influence_estimates_flat = magic_influence_estimates_to_use.sum(axis=0)
+        logger.info(f"Summed per-step MAGIC scores (shape {magic_influence_estimates_to_use.shape}) to flat scores (shape {magic_influence_estimates_flat.shape}).")
+    elif magic_influence_estimates_to_use.ndim == 1:  # Already flat scores [num_train_samples]
+        magic_influence_estimates_flat = magic_influence_estimates_to_use
+        logger.info(f"Using flat MAGIC scores (shape {magic_influence_estimates_flat.shape}).")
     else:
-        logger.error(f"Loaded MAGIC scores have unexpected shape: {loaded_scores.shape}")
+        logger.error(f"MAGIC scores have unexpected shape: {magic_influence_estimates_to_use.shape}")
         return False
     
     # Create binary mask arrays for the models we have data for
@@ -546,7 +565,7 @@ def compute_and_plot_lds_correlation(lds_validation_margins: np.ndarray,
     
     # Compute predicted performance using MAGIC influence scores
     logger.info("Computing predicted performance using MAGIC influence scores...")
-    predicted_loss_impact_on_target = lds_training_data_masks @ magic_influence_estimates.T
+    predicted_loss_impact_on_target = lds_training_data_masks @ magic_influence_estimates_flat.T
     logger.info(f"Computed MAGIC-based predictions for {len(predicted_loss_impact_on_target)} LDS models")
     
     # Extract actual validation losses for the target image
@@ -680,7 +699,8 @@ def load_existing_lds_results_and_plot_correlation(precomputed_magic_scores_path
         model_ids_used=model_ids_used,
         precomputed_magic_scores_path=precomputed_magic_scores_path,
         target_val_idx=target_val_idx,
-        plot_suffix="_existing"
+        plot_suffix="_existing",
+        loaded_magic_influence_estimates=None
     )
     
     if success:
@@ -838,16 +858,32 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
 
     logger.info(f"Loading MAGIC scores from {effective_magic_scores_path_for_run} for correlation...")
     with open(effective_magic_scores_path_for_run, 'rb') as f:
-        loaded_scores = pickle.load(f)
+        loaded_data = pickle.load(f)
     
-    if loaded_scores.ndim == 2:
-        magic_influence_estimates = loaded_scores.sum(axis=0)
-        logger.info(f"Summed per-step MAGIC scores (shape {loaded_scores.shape}) to flat scores (shape {magic_influence_estimates.shape}).")
-    elif loaded_scores.ndim == 1:
-        magic_influence_estimates = loaded_scores
-        logger.info(f"Loaded flat MAGIC scores (shape {magic_influence_estimates.shape}).")
+    magic_influence_estimates: np.ndarray
+    if isinstance(loaded_data, dict) and 'scores' in loaded_data:
+        logger.info("Loaded MAGIC scores as a dictionary, extracting 'scores' key.")
+        raw_scores = loaded_data['scores']
+        if not isinstance(raw_scores, np.ndarray):
+            logger.info(f"Converting MAGIC scores from {type(raw_scores)} to np.ndarray.")
+            magic_influence_estimates = np.array(raw_scores)
+        else:
+            magic_influence_estimates = raw_scores
+    elif isinstance(loaded_data, np.ndarray):
+        magic_influence_estimates = loaded_data
     else:
-        raise ValueError(f"Loaded MAGIC scores from {effective_magic_scores_path_for_run} have unexpected shape: {loaded_scores.shape}")
+        logger.error(f"Loaded MAGIC scores from {effective_magic_scores_path_for_run} have unexpected type or format: {type(loaded_data)}")
+        return False
+
+    if magic_influence_estimates.ndim == 2:  # Per-step scores [num_steps, num_train_samples]
+        magic_influence_estimates_flat = magic_influence_estimates.sum(axis=0)
+        logger.info(f"Summed per-step MAGIC scores (shape {magic_influence_estimates.shape}) to flat scores (shape {magic_influence_estimates_flat.shape}).")
+    elif magic_influence_estimates.ndim == 1:  # Already flat scores [num_train_samples]
+        magic_influence_estimates_flat = magic_influence_estimates
+        logger.info(f"Using flat MAGIC scores (shape {magic_influence_estimates_flat.shape}).")
+    else:
+        logger.error(f"MAGIC scores have unexpected shape: {magic_influence_estimates.shape}")
+        return False
 
     model_ids_used = list(range(config.LDS_NUM_MODELS_TO_TRAIN))
     success = compute_and_plot_lds_correlation(
@@ -856,7 +892,8 @@ def run_lds_validation(precomputed_magic_scores_path: Optional[Union[str, Path]]
         model_ids_used=model_ids_used,
         precomputed_magic_scores_path=effective_magic_scores_path_for_run,
         target_val_idx=config.LDS_TARGET_VAL_IMAGE_IDX_FOR_CORRELATION,
-        plot_suffix=""  # No suffix for main LDS run
+        plot_suffix="",
+        loaded_magic_influence_estimates=magic_influence_estimates_flat
     )
     
     if success:

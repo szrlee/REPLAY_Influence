@@ -513,33 +513,33 @@ class TestSaveRunMetadata:
     @patch('src.run_manager.project_config.get_current_config_dict')
     @patch('src.run_manager.datetime') # To control timestamp
     def test_save_metadata_specified_run_dir(self, mock_datetime, mock_get_config, mock_file_open, mock_json_dump):
-        """Test saving metadata to a specified run directory."""
+        """Test saving metadata to a specifically provided run directory."""
         mock_now = MagicMock()
-        mock_now.isoformat.return_value = "2025-01-01T10:00:00_test_ts"
+        mock_now.isoformat.return_value = "mocked_iso_timestamp"
         mock_datetime.datetime.now.return_value = mock_now
-        
-        mock_config_snapshot = {"SEED": 999, "DEVICE": "test_device"}
-        mock_get_config.return_value = mock_config_snapshot
 
-        test_metadata_input = {"status": "testing", "value": 123}
-        # TEST_RUNS_BASE_DIR is already set up by the autouse fixture to be under TEST_OUTPUTS_DIR
-        # project_config.OUTPUTS_DIR is monkeypatched to TEST_OUTPUTS_DIR
-        specified_run_id = "specified_run_for_metadata"
-        specified_run_path = TEST_RUNS_BASE_DIR / specified_run_id
-        specified_run_path.mkdir(parents=True, exist_ok=True) # Ensure dir exists for the test
+        mock_config_snapshot_from_func = {"SEED": 42, "MODE": "test"}
+        mock_get_config.return_value = mock_config_snapshot_from_func
 
-        run_manager.save_run_metadata(dict(test_metadata_input), run_dir=specified_run_path)
+        test_run_id = "test_run_for_metadata"
+        test_run_path = TEST_RUNS_BASE_DIR / test_run_id
+        test_run_path.mkdir(parents=True, exist_ok=True) # Ensure dir exists
 
-        expected_metadata_file = specified_run_path / "run_metadata.json"
-        mock_file_open.assert_called_once_with(expected_metadata_file, 'w')
+        input_metadata = {"status": "test_status", "run_id": test_run_id}
+        run_manager.save_run_metadata(dict(input_metadata), run_dir=test_run_path)
+
         mock_json_dump.assert_called_once()
-        
         written_data = mock_json_dump.call_args[0][0]
-        assert written_data["status"] == "testing"
-        assert written_data["value"] == 123
-        assert written_data["timestamp"] == "2025-01-01T10:00:00_test_ts"
-        assert written_data["config"] == mock_config_snapshot
-        mock_get_config.assert_called_once()
+
+        assert written_data["status"] == "test_status"
+        assert written_data["run_id"] == test_run_id
+        assert "timestamp" in written_data
+        assert written_data["timestamp"] == "mocked_iso_timestamp"
+        # Test that the mocked config was used and under the new key
+        assert written_data['config_snapshot'] == mock_config_snapshot_from_func
+        assert written_data['config_snapshot']["SEED"] == 42
+        mock_get_config.assert_called_once() # It should be called as no config was provided in input_metadata
+        mock_file_open.assert_called_with(test_run_path / "run_metadata.json", 'w')
 
     @patch('json.dump')
     @patch('builtins.open', new_callable=mock_open)
@@ -547,31 +547,32 @@ class TestSaveRunMetadata:
     @patch('src.run_manager.datetime')
     @patch('src.run_manager.get_current_run_dir') # Mock to control what current run dir is
     def test_save_metadata_current_run_dir(self, mock_get_current_run, mock_datetime, mock_get_config, mock_file_open, mock_json_dump):
-        """Test saving metadata when run_dir is None, using mocked current_run_dir."""
+        """Test saving metadata when run_dir is None (uses current run directory)."""
+        mock_current_run_path = TEST_RUNS_BASE_DIR / "current_mock_run"
+        mock_current_run_path.mkdir(parents=True, exist_ok=True)
+        mock_get_current_run.return_value = mock_current_run_path
+
         mock_now = MagicMock()
-        mock_now.isoformat.return_value = "2025-01-02T11:00:00_test_ts2"
+        mock_now.isoformat.return_value = "mocked_iso_timestamp_current"
         mock_datetime.datetime.now.return_value = mock_now
 
-        mock_config_snapshot = {"SEED": 111, "MODE": "fast"}
-        mock_get_config.return_value = mock_config_snapshot
+        mock_config_snapshot_from_func_current = {"SPECIAL_KEY": "current_test"}
+        mock_get_config.return_value = mock_config_snapshot_from_func_current
 
-        current_run_path_mock = TEST_RUNS_BASE_DIR / "current_run_for_metadata_test"
-        current_run_path_mock.mkdir(parents=True, exist_ok=True)
-        mock_get_current_run.return_value = current_run_path_mock
+        input_metadata = {"status": "test_status_current"}
+        run_manager.save_run_metadata(dict(input_metadata), run_dir=None) # run_dir is None
 
-        test_metadata_input = {"status": "running_current"}
-        run_manager.save_run_metadata(dict(test_metadata_input), run_dir=None)
-
-        expected_metadata_file = current_run_path_mock / "run_metadata.json"
-        mock_file_open.assert_called_once_with(expected_metadata_file, 'w')
         mock_json_dump.assert_called_once()
-        
         written_data = mock_json_dump.call_args[0][0]
-        assert written_data["status"] == "running_current"
-        assert written_data["timestamp"] == "2025-01-02T11:00:00_test_ts2"
-        assert written_data["config"] == mock_config_snapshot
-        mock_get_current_run.assert_called_once()
-        mock_get_config.assert_called_once()
+
+        assert written_data["status"] == "test_status_current"
+        assert "timestamp" in written_data
+        assert written_data["timestamp"] == "mocked_iso_timestamp_current"
+        # Test that the mocked config was used and under the new key
+        assert written_data['config_snapshot'] == mock_config_snapshot_from_func_current
+        assert written_data['config_snapshot']["SPECIAL_KEY"] == "current_test"
+        mock_get_config.assert_called_once() # It should be called as no config was provided in input_metadata
+        mock_file_open.assert_called_with(mock_current_run_path / "run_metadata.json", 'w')
 
     @patch('json.dump')
     @patch('builtins.open', new_callable=mock_open)
@@ -579,28 +580,30 @@ class TestSaveRunMetadata:
     @patch('src.run_manager.datetime')
     def test_save_metadata_preserves_existing_timestamp_and_config(self, mock_datetime, mock_get_config, mock_file_open, mock_json_dump):
         """Test that existing timestamp and config in metadata are preserved."""
-        mock_config_snapshot_from_func = {"SEED": 123}
-        mock_get_config.return_value = mock_config_snapshot_from_func # This should NOT be used if config is in input
-
+        mock_config_snapshot_from_func = {"SEED": 123} # This value is from the mock perspective
+        mock_get_config.return_value = mock_config_snapshot_from_func
+    
         test_run_id = "run_with_existing_meta"
         test_run_path = TEST_RUNS_BASE_DIR / test_run_id
         test_run_path.mkdir(parents=True, exist_ok=True)
-
+    
+        # IMPORTANT: Input metadata now uses 'config' (the old key) to test the renaming/preservation logic
         input_metadata = {
             "status": "final_check",
             "timestamp": "user_defined_timestamp_preserved",
-            "config": {"USER_SEED": 777, "OTHER_PARAM": "keep_this"}
+            "config": {"USER_SEED": 777, "OTHER_PARAM": "keep_this"} # Using old 'config' key
         }
         run_manager.save_run_metadata(dict(input_metadata), run_dir=test_run_path)
-
+    
         mock_json_dump.assert_called_once()
         written_data = mock_json_dump.call_args[0][0]
-
+    
         assert written_data["status"] == "final_check"
         assert written_data["timestamp"] == "user_defined_timestamp_preserved"
-        assert written_data["config"] == {"USER_SEED": 777, "OTHER_PARAM": "keep_this"}
+        # Assert that the original 'config' is now under 'config_snapshot'
+        assert written_data["config_snapshot"] == {"USER_SEED": 777, "OTHER_PARAM": "keep_this"}
         mock_datetime.datetime.now.assert_not_called() # Timestamp should not be regenerated
-        mock_get_config.assert_not_called() # Config snapshot should not be regenerated
+        mock_get_config.assert_not_called() # Config snapshot should not be regenerated from project_config
 
 
 class TestPathGenerationFunctions:

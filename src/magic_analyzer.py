@@ -126,7 +126,8 @@ class MagicAnalyzer:
             # Use atomic write to prevent corruption
             temp_file = batch_file.with_suffix('.pkl.tmp')
             with open(temp_file, 'wb') as f:
-                pickle.dump(batch_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                # pickle.dump(batch_data, f, protocol=pickle.HIGHEST_PROTOCOL) # Old way
+                torch.save(batch_data, f) # New way
             
             # Verify file was written correctly
             if not temp_file.exists() or temp_file.stat().st_size == 0:
@@ -141,41 +142,28 @@ class MagicAnalyzer:
             # Cleanup on failure
             if 'temp_file' in locals() and temp_file.exists():
                 temp_file.unlink(missing_ok=True)
-            raise RuntimeError(f"Failed to save batch {step} to disk: {e}") from e
+            # raise RuntimeError(f"Failed to save batch {step} to disk: {e}") from e # Original
+            # Let's make the error message more specific if it's a torch.save issue, though type might be broad
+            raise RuntimeError(f"Failed to torch.save batch {step} to disk: {e}") from e 
 
-    def _load_batch_from_disk(self, step: int) -> Dict[str, torch.Tensor]:
-        """Load a batch from disk for memory-efficient replay with enhanced error handling."""
-        batch_file = self._get_batch_file_path(step)
-        
-        if not batch_file.exists():
-            raise FileNotFoundError(f"Batch file not found: {batch_file}")
-        
-        # Check file size
-        file_size = batch_file.stat().st_size
-        if file_size == 0:
-            raise RuntimeError(f"Batch file for step {step} is empty: {batch_file}")
+    def _load_batch_from_disk(self, step: int) -> Dict[str, Any]:
+        """Load a specific batch from its .pkl file on disk."""
+        batch_file_path = self._get_batch_file_path(step)
+        if not batch_file_path.exists():
+            raise FileNotFoundError(f"Batch file for step {step} not found at {batch_file_path}")
         
         try:
-            with open(batch_file, 'rb') as f:
-                batch_data = pickle.load(f)
-            
-            # Validate loaded data
-            if not isinstance(batch_data, dict):
-                raise RuntimeError(f"Invalid batch data type for step {step}: {type(batch_data)}")
-            
-            # Check for required keys
-            required_keys = {'ims', 'labs', 'idx', 'lr'}
-            missing_keys = required_keys - set(batch_data.keys())
-            if missing_keys:
-                raise RuntimeError(f"Corrupted batch data for step {step}, missing keys: {missing_keys}")
-            
-            self.logger.debug(f"Successfully loaded batch {step} from disk ({file_size} bytes)")
+            with open(batch_file_path, 'rb') as f:
+                # batch_data = pickle.load(f) # Old way
+                batch_data = torch.load(f) # New way, assuming it was saved with torch.save
             return batch_data
-            
-        except (OSError, pickle.UnpicklingError, EOFError) as e:
+        except Exception as e:
+            # Log the original exception for more detailed debugging if needed
+            logger.error(f"Pickling error while loading batch {step} from {batch_file_path}: {e}")
+            # Wrap in a RuntimeError to be consistent with previous error type if preferred
             raise RuntimeError(f"Failed to load batch {step} from disk: {e}") from e
 
-    def _get_batch_data(self, step: int) -> Dict[str, torch.Tensor]:
+    def _get_batch_data(self, step: int) -> Dict[str, Any]:
         """Get batch data either from memory or disk."""
         if self.use_memory_efficient_replay:
             return self._load_batch_from_disk(step)
