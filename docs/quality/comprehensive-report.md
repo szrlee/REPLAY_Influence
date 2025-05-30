@@ -87,21 +87,7 @@ def validate_config() -> None:
 ```
 
 #### **Hyperparameter Configuration**
-Key hyperparameters are centralized in `src/config.py`. Values reflect those used for testing and development (e.g., after stability fixes):
-
-```python
-# Example values from src/config.py (refer to file for current truth)
-MODEL_TRAIN_LR = 0.025  # Peak LR for OneCycleLR
-MODEL_TRAIN_MOMENTUM = 0.875
-MODEL_TRAIN_WEIGHT_DECAY = 0.001
-LR_SCHEDULE_TYPE = 'OneCycleLR'
-ONECYCLE_PCT_START = 0.5
-
-RESNET9_WIDTH_MULTIPLIER = 2.5
-RESNET9_BIAS_SCALE = 1.0 # Adjusted for stability
-RESNET9_FINAL_LAYER_SCALE = 0.04
-RESNET9_POOLING_EPSILON = 0.1
-```
+Key hyperparameters for training (e.g., `MODEL_TRAIN_LR`, `MODEL_TRAIN_MOMENTUM`, `LR_SCHEDULE_TYPE`) and model architecture (e.g., `RESNET9_WIDTH_MULTIPLIER`, `RESNET9_BIAS_SCALE`) are centralized in `src/config.py`. This file serves as the source of truth for current values. The settings reflect those used for robust testing and development, including adjustments made for numerical stability (such as `RESNET9_BIAS_SCALE = 1.0`). Centralizing these parameters ensures consistency and facilitates easier management for reproducible experiments.
 
 ### **4. Enhanced Error Handling & Exception Management**
 
@@ -114,6 +100,7 @@ class ComponentCreationError(Exception): pass
 
 #### **Robust Operations (e.g., in `src/magic_analyzer.py`)**
 Memory-efficient replay includes atomic writes and validation for batch files.
+For a detailed explanation of the replay algorithm itself as implemented in `MagicAnalyzer`, see the **[Influence Replay Algorithm Deep Dive](../technical/influence-replay-algorithm.md)**.
 ```python
 # Snippet from MagicAnalyzer._save_batch_to_disk
 def _save_batch_to_disk(self, step: int, batch_data: Dict[str, torch.Tensor]) -> None:

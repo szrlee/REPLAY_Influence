@@ -190,7 +190,7 @@ def run_magic_analysis(run_id: Optional[str], skip_train: bool, force: bool) -> 
         
         # Run MAGIC analysis
         logger.info("--- Running MAGIC Influence Analysis ---")
-        analyzer = MagicAnalyzer(use_memory_efficient_replay=False)
+        analyzer = MagicAnalyzer(use_memory_efficient_replay=True)
         
         if skip_train:
             logger.info("Skipping training, loading existing artifacts...")

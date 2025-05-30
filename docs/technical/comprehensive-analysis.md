@@ -390,6 +390,8 @@ class MagicAnalyzer:
 
 ## 🎯 **EXACT ALGORITHM CORRECTNESS**
 
+For a detailed step-by-step breakdown of the influence replay algorithm, its theoretical underpinnings, and how it is implemented in `MagicAnalyzer`, please refer to the **[Influence Replay Algorithm Deep Dive](influence-replay-algorithm.md)**.
+
 ### **Training Sequence (MAGIC & LDS - Identical)**
 ```python
 # STEP 1: Store state BEFORE training step

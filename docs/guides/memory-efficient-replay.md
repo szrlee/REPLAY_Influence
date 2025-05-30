@@ -332,6 +332,7 @@ If you modify `main_runner.py` or your programmatic script to change the `use_me
 
 ## 📚 **Further Reading**
 
+- **[Influence Replay Algorithm Deep Dive](../technical/influence-replay-algorithm.md)** - Detailed step-by-step explanation of the influence replay algorithm and its implementation.
 - **[Technical Deep Dive on REPLAY Algorithm & Determinism](../technical/comprehensive-analysis.md)**
 - **[Main Project README](../../README.md)** (for up-to-date CLI commands and general project overview)
 - **[Configuration File (`src/config.py`)]**(for model, training, and algorithm parameters)

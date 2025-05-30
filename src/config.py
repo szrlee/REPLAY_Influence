@@ -98,7 +98,7 @@ PAPER_MEASUREMENT_TARGET_INDICES = list(range(PAPER_NUM_MEASUREMENT_FUNCTIONS)) 
 # Updated to match ResNet-9 on CIFAR-10 specifications from [Jor24a]
 # and user-provided large-batch SGD recipe.
 MODEL_TRAIN_LR = 0.02  # Peak LR for OneCycleLR.
-MODEL_TRAIN_EPOCHS = 25 # Reduced for faster integration testing
+MODEL_TRAIN_EPOCHS = 15 # Reduced for faster integration testing
 WARMUP_EPOCHS = 0       # OneCycleLR handles its own warmup via pct_start. Set to 0.
 MODEL_TRAIN_BATCH_SIZE = 1000
 MODEL_TRAIN_MOMENTUM = 0.875
