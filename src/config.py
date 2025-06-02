@@ -178,8 +178,8 @@ LDS_INDICES_FILE = "indices_lds.pkl" # Name of the file storing LDS subset indic
 
 # Parameters for LDS subset generation
 LDS_SUBSET_FRACTION = 0.99
-LDS_NUM_SUBSETS_TO_GENERATE = 1 # Reduced to save disk space and time
-LDS_NUM_MODELS_TO_TRAIN = 1    # Reduced to save disk space and time
+LDS_NUM_SUBSETS_TO_GENERATE = 16 # Reduced to save disk space and time
+LDS_NUM_MODELS_TO_TRAIN = 16    # Reduced to save disk space and time
 
 # LDS training uses the same hyperparameters as MAGIC (config.MODEL_TRAIN_*) 
 
