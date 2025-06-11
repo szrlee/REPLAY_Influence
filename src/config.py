@@ -101,7 +101,7 @@ PAPER_MEASUREMENT_TARGET_INDICES = list(range(PAPER_NUM_MEASUREMENT_FUNCTIONS)) 
 # Updated to match ResNet-9 on CIFAR-10 specifications from [Jor24a]
 # and user-provided large-batch SGD recipe.
 MODEL_TRAIN_LR = 1e-3  # Peak LR for OneCycleLR.
-MODEL_TRAIN_EPOCHS = 1 # Reduced for faster integration testing
+MODEL_TRAIN_EPOCHS = 2 # Reduced for faster integration testing
 WARMUP_EPOCHS = 0       # OneCycleLR handles its own warmup via pct_start. Set to 0.
 MODEL_TRAIN_BATCH_SIZE = 256
 MODEL_TRAIN_MOMENTUM = 0
@@ -126,9 +126,9 @@ ADAM_EPSILON = 1e-8
 # To use the ResNet-9 based on the user's table interpretation:
 # MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = ResNet9TableArch
 # To use the original ResNet-9 paper implementation from this project:
-# MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_resnet9_paper
+MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_resnet9_paper
 # To use the alternative ResNet-9 implementation:
-MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_rn9
+# MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_rn9
 
 # Store the alternative for reference or programmatic switching if needed elsewhere
 # ALTERNATIVE_MODEL_CREATOR_FUNCTION: Callable[..., torch.nn.Module] = construct_rn9
@@ -145,7 +145,7 @@ RESNET9_POOLING_EPSILON = 0.1     # Epsilon for log-sum-exp pooling
 # Note: If WARMUP_EPOCHS > 0, the main scheduler (e.g., CosineAnnealingLR)
 # typically starts after WARMUP_EPOCHS. The training script should handle the
 # warmup phase (e.g., linear ramp-up) and then transition to this scheduler.
-LR_SCHEDULE_TYPE = None
+LR_SCHEDULE_TYPE = 'OneCycleLR'
 
 # StepLR parameters
 STEPLR_STEP_SIZE = 10 # Not used if OneCycleLR is active
@@ -178,8 +178,8 @@ LDS_INDICES_FILE = "indices_lds.pkl" # Name of the file storing LDS subset indic
 
 # Parameters for LDS subset generation
 LDS_SUBSET_FRACTION = 0.99
-LDS_NUM_SUBSETS_TO_GENERATE = 16 # Reduced to save disk space and time
-LDS_NUM_MODELS_TO_TRAIN = 16    # Reduced to save disk space and time
+LDS_NUM_SUBSETS_TO_GENERATE = 32 # Reduced to save disk space and time
+LDS_NUM_MODELS_TO_TRAIN = 32    # Reduced to save disk space and time
 
 # LDS training uses the same hyperparameters as MAGIC (config.MODEL_TRAIN_*) 
 
